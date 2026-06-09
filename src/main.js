@@ -19,7 +19,10 @@ document.querySelector('#app').innerHTML = `
         <p>hxwl-11 · port 5111</p>
         <h1>城市噪声切片</h1>
       </div>
-      <button id="reset">载入示例</button>
+      <div class="topButtons">
+        <button id="reportBtn">生成报告</button>
+        <button id="reset">载入示例</button>
+      </div>
     </header>
 
     <section class="summary" id="summary"></section>
@@ -89,6 +92,30 @@ document.querySelector('#app').innerHTML = `
     <section class="panel">
       <div class="panelHead"><h2>记录列表</h2><input id="search" placeholder="搜索地点或来源" /></div>
       <div class="tableWrap"><table><thead><tr><th>时间</th><th>地点</th><th>分贝</th><th>来源</th><th>感受</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>
+    </section>
+
+    <section class="panel report-panel hidden" id="reportPanel">
+      <div class="panelHead">
+        <h2>噪声观测报告</h2>
+        <div class="reportActions">
+          <button id="closeReport" class="secondary">关闭</button>
+          <button id="printReport" class="primary">打印报告</button>
+        </div>
+      </div>
+
+      <div class="report-filter">
+        <div class="date-range">
+          <label>开始日期：<input type="date" id="reportStartDate" /></label>
+          <label>结束日期：<input type="date" id="reportEndDate" /></label>
+          <button id="generateReport" class="primary">生成</button>
+        </div>
+      </div>
+
+      <div class="report-content" id="reportContent">
+        <div class="report-empty">
+          <p>请选择日期范围后点击"生成"按钮</p>
+        </div>
+      </div>
     </section>
   </main>
 `;
@@ -208,6 +235,219 @@ fileInput.addEventListener('change', (e) => {
 });
 cancelImportBtn.addEventListener('click', resetImport);
 confirmImportBtn.addEventListener('click', confirmImport);
+
+const reportBtn = document.querySelector('#reportBtn');
+const reportPanel = document.querySelector('#reportPanel');
+const closeReport = document.querySelector('#closeReport');
+const printReport = document.querySelector('#printReport');
+const generateReport = document.querySelector('#generateReport');
+const reportStartDate = document.querySelector('#reportStartDate');
+const reportEndDate = document.querySelector('#reportEndDate');
+const reportContent = document.querySelector('#reportContent');
+
+reportBtn.addEventListener('click', () => {
+  reportPanel.classList.remove('hidden');
+  const dates = records.map(r => r.at.slice(0, 10)).sort();
+  if (dates.length) {
+    reportStartDate.value = dates[0];
+    reportEndDate.value = dates[dates.length - 1];
+  }
+  reportPanel.scrollIntoView({ behavior: 'smooth' });
+});
+
+closeReport.addEventListener('click', () => {
+  reportPanel.classList.add('hidden');
+});
+
+printReport.addEventListener('click', () => {
+  window.print();
+});
+
+generateReport.addEventListener('click', () => {
+  const start = reportStartDate.value;
+  const end = reportEndDate.value;
+  if (!start || !end) {
+    alert('请选择开始和结束日期');
+    return;
+  }
+  if (start > end) {
+    alert('开始日期不能晚于结束日期');
+    return;
+  }
+  renderReport(start, end);
+});
+
+function filterRecordsByDateRange(startDate, endDate) {
+  return records.filter(record => {
+    const date = record.at.slice(0, 10);
+    return date >= startDate && date <= endDate;
+  });
+}
+
+function calculateReportStats(filtered) {
+  if (!filtered.length) return null;
+
+  const dbs = filtered.map(r => r.db);
+  const avgDb = average(dbs);
+  const maxDb = Math.max(...dbs);
+  const highNoiseCount = filtered.filter(r => r.db >= 75).length;
+  const highNoiseRatio = (highNoiseCount / filtered.length * 100).toFixed(1);
+
+  const locationStats = {};
+  filtered.forEach(r => {
+    if (!locationStats[r.location]) {
+      locationStats[r.location] = { count: 0, totalDb: 0, maxDb: 0, highNoiseCount: 0 };
+    }
+    locationStats[r.location].count++;
+    locationStats[r.location].totalDb += r.db;
+    locationStats[r.location].maxDb = Math.max(locationStats[r.location].maxDb, r.db);
+    if (r.db >= 75) locationStats[r.location].highNoiseCount++;
+  });
+
+  const locationRanking = Object.entries(locationStats)
+    .map(([location, stats]) => ({
+      location,
+      count: stats.count,
+      avgDb: (stats.totalDb / stats.count).toFixed(1),
+      maxDb: stats.maxDb,
+      highNoiseCount: stats.highNoiseCount
+    }))
+    .sort((a, b) => parseFloat(b.avgDb) - parseFloat(a.avgDb));
+
+  const highNoiseRecords = filtered
+    .filter(r => r.db >= 75)
+    .sort((a, b) => b.db - a.db);
+
+  return {
+    count: filtered.length,
+    avgDb: avgDb.toFixed(1),
+    maxDb,
+    highNoiseCount,
+    highNoiseRatio,
+    locationRanking,
+    highNoiseRecords,
+    startDate: reportStartDate.value,
+    endDate: reportEndDate.value
+  };
+}
+
+function renderReport(startDate, endDate) {
+  const filtered = filterRecordsByDateRange(startDate, endDate);
+  const stats = calculateReportStats(filtered);
+
+  if (!stats) {
+    reportContent.innerHTML = `
+      <div class="report-empty">
+        <p>所选日期范围内没有观测记录</p>
+      </div>
+    `;
+    return;
+  }
+
+  reportContent.innerHTML = `
+    <div class="report-page" id="reportPage">
+      <div class="report-header">
+        <h1>噪声观测报告</h1>
+        <p class="report-date">报告时间：${new Date().toLocaleString('zh-CN')}</p>
+        <p class="report-date">统计范围：${stats.startDate} 至 ${stats.endDate}</p>
+      </div>
+
+      <div class="report-summary">
+        <div class="report-summary-item">
+          <span class="report-label">观测数</span>
+          <span class="report-value">${stats.count}</span>
+        </div>
+        <div class="report-summary-item">
+          <span class="report-label">平均分贝</span>
+          <span class="report-value">${stats.avgDb}dB</span>
+        </div>
+        <div class="report-summary-item">
+          <span class="report-label">最高分贝</span>
+          <span class="report-value">${stats.maxDb}dB</span>
+        </div>
+        <div class="report-summary-item">
+          <span class="report-label">高噪声占比</span>
+          <span class="report-value">${stats.highNoiseRatio}%</span>
+        </div>
+      </div>
+
+      <div class="report-section">
+        <h3>一、概要说明</h3>
+        <p>本次报告统计了 <strong>${stats.startDate}</strong> 至 <strong>${stats.endDate}</strong> 期间的噪声观测数据，共包含 <strong>${stats.count}</strong> 条有效记录。</p>
+        <p>期间平均噪声为 <strong>${stats.avgDb}dB</strong>，最高噪声达到 <strong>${stats.maxDb}dB</strong>，高噪声（≥75dB）记录共 <strong>${stats.highNoiseCount}</strong> 条，占比 <strong>${stats.highNoiseRatio}%</strong>。</p>
+      </div>
+
+      <div class="report-section">
+        <h3>二、地点排行</h3>
+        <p>按平均噪声从高到低排列：</p>
+        <div class="tableWrap">
+          <table class="report-table">
+            <thead>
+              <tr>
+                <th>排名</th>
+                <th>地点</th>
+                <th>观测次数</th>
+                <th>平均分贝</th>
+                <th>最高分贝</th>
+                <th>高噪声次数</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${stats.locationRanking.map((item, index) => `
+                <tr>
+                  <td>${index + 1}</td>
+                  <td>${item.location}</td>
+                  <td>${item.count}</td>
+                  <td>${item.avgDb}dB</td>
+                  <td>${item.maxDb}dB</td>
+                  <td>${item.highNoiseCount}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="report-section">
+        <h3>三、高噪声明细</h3>
+        <p>噪声≥75dB的记录明细（共${stats.highNoiseRecords.length}条）：</p>
+        ${stats.highNoiseRecords.length ? `
+          <div class="tableWrap">
+            <table class="report-table">
+              <thead>
+                <tr>
+                  <th>序号</th>
+                  <th>时间</th>
+                  <th>地点</th>
+                  <th>分贝</th>
+                  <th>来源</th>
+                  <th>主观感受</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${stats.highNoiseRecords.map((record, index) => `
+                  <tr>
+                    <td>${index + 1}</td>
+                    <td>${record.at.replace('T', ' ')}</td>
+                    <td>${record.location}</td>
+                    <td><strong>${record.db}dB</strong></td>
+                    <td>${record.source}</td>
+                    <td>${record.feeling}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        ` : '<p class="empty">该期间无高噪声记录。</p>'}
+      </div>
+
+      <div class="report-footer">
+        <p>报告生成系统：城市噪声观测平台 hxwl-11</p>
+        <p>本报告由系统自动生成，仅供参考。</p>
+      </div>
+    </div>
+  `;
+}
 
 function handleFile(file) {
   const ext = file.name.split('.').pop().toLowerCase();
