@@ -3,6 +3,8 @@ import './styles.css';
 const key = 'hxwl-11-noise-records';
 const thresholdKey = 'hxwl-11-noise-thresholds';
 const monitoringPointsKey = 'hxwl-11-monitoring-points';
+const alarmsKey = 'hxwl-11-noise-alarms';
+const alarmConfigKey = 'hxwl-11-alarm-config';
 
 const seed = [
   { id: crypto.randomUUID(), location: '老城菜市口', at: '2026-06-05T07:40', db: 76, source: '叫卖与卸货', feeling: '嘈杂', monitoringPointId: null },
@@ -35,13 +37,24 @@ const defaultThresholds = {
   lowReference: 50
 };
 
+const defaultAlarmConfig = {
+  multipleExceedThreshold: 3,
+  nightStartHour: 22,
+  nightEndHour: 6,
+  nightNoiseThreshold: 65
+};
+
 let records = JSON.parse(localStorage.getItem(key) || 'null') || seed;
 let monitoringPoints = JSON.parse(localStorage.getItem(monitoringPointsKey) || 'null') || defaultMonitoringPoints;
 let thresholds = JSON.parse(localStorage.getItem(thresholdKey) || 'null') || { ...defaultThresholds };
+let alarms = JSON.parse(localStorage.getItem(alarmsKey) || 'null') || [];
+let alarmConfig = JSON.parse(localStorage.getItem(alarmConfigKey) || 'null') || { ...defaultAlarmConfig };
 let editingId = null;
 let editingPointId = null;
 let useManualLocation = false;
 let selectedMonitoringPointFilter = '';
+let alarmStatusFilter = 'all';
+let alarmTypeFilter = 'all';
 
 function migrateData() {
   records = records.map(record => {
@@ -76,6 +89,7 @@ document.querySelector('#app').innerHTML = `
         <h1>城市噪声切片</h1>
       </div>
       <div class="topButtons">
+        <button id="alarmCenterBtn">告警中心</button>
         <button id="monitoringPointsBtn">监测点管理</button>
         <button id="thresholdBtn">阈值设置</button>
         <button id="reportBtn">生成报告</button>
@@ -359,6 +373,92 @@ document.querySelector('#app').innerHTML = `
         </div>
       </div>
     </div>
+
+    <div class="alarm-center-overlay hidden" id="alarmCenterOverlay">
+      <div class="alarm-center-panel">
+        <div class="alarm-center-header">
+          <h2>噪声告警中心</h2>
+          <button class="alarm-center-close" id="alarmCenterClose">&times;</button>
+        </div>
+        <div class="alarm-center-content">
+          <div class="alarm-summary">
+            <div class="alarm-stat-card pending">
+              <span class="alarm-stat-label">待处理</span>
+              <strong class="alarm-stat-value" id="alarmPendingCount">0</strong>
+            </div>
+            <div class="alarm-stat-card confirmed">
+              <span class="alarm-stat-label">已确认</span>
+              <strong class="alarm-stat-value" id="alarmConfirmedCount">0</strong>
+            </div>
+            <div class="alarm-stat-card ignored">
+              <span class="alarm-stat-label">已忽略</span>
+              <strong class="alarm-stat-value" id="alarmIgnoredCount">0</strong>
+            </div>
+            <div class="alarm-stat-card total">
+              <span class="alarm-stat-label">总计</span>
+              <strong class="alarm-stat-value" id="alarmTotalCount">0</strong>
+            </div>
+          </div>
+
+          <div class="alarm-filters">
+            <div class="filter-group">
+              <label>状态筛选：</label>
+              <select id="alarmStatusFilter">
+                <option value="all">全部状态</option>
+                <option value="pending">待处理</option>
+                <option value="confirmed">已确认</option>
+                <option value="ignored">已忽略</option>
+              </select>
+            </div>
+            <div class="filter-group">
+              <label>类型筛选：</label>
+              <select id="alarmTypeFilter">
+                <option value="all">全部类型</option>
+                <option value="single">单条超阈值</option>
+                <option value="multiple">日内多次超标</option>
+                <option value="nighttime">夜间高噪声</option>
+              </select>
+            </div>
+            <button class="secondary" id="recalculateAlarmsBtn">重新计算告警</button>
+          </div>
+
+          <div class="alarm-rules-config">
+            <h3>告警规则配置</h3>
+            <div class="rules-grid">
+              <div class="rule-item">
+                <label>日内多次超标阈值</label>
+                <input type="number" id="multipleExceedThreshold" min="2" max="10" />
+                <span class="rule-desc">同一地点一天内超过此次数即告警</span>
+              </div>
+              <div class="rule-item">
+                <label>夜间开始时间</label>
+                <input type="number" id="nightStartHour" min="0" max="23" />
+                <span class="rule-desc">夜间时段开始（小时，24小时制）</span>
+              </div>
+              <div class="rule-item">
+                <label>夜间结束时间</label>
+                <input type="number" id="nightEndHour" min="0" max="23" />
+                <span class="rule-desc">夜间时段结束（小时，24小时制）</span>
+              </div>
+              <div class="rule-item">
+                <label>夜间噪声阈值</label>
+                <input type="number" id="nightNoiseThreshold" min="20" max="130" />
+                <span class="rule-desc">夜间时段超过此值即告警（dB）</span>
+              </div>
+            </div>
+            <div class="alarm-config-actions">
+              <button class="secondary" id="resetAlarmConfig">恢复默认</button>
+              <button class="primary" id="saveAlarmConfig">保存配置</button>
+            </div>
+          </div>
+
+          <div class="alarm-list-section">
+            <h3>告警列表</h3>
+            <div id="alarmList" class="alarm-list"></div>
+          </div>
+        </div>
+      </div>
+    </div>
   </main>
 `;
 
@@ -402,6 +502,7 @@ form.addEventListener('submit', (event) => {
   useManualLocation = false;
   updateLocationInput();
   save();
+  recalculateAlarms();
   render();
 });
 search.addEventListener('input', render);
@@ -419,6 +520,61 @@ document.querySelector('#toggleManualLocation').addEventListener('click', () => 
 document.querySelector('#toggleSelectLocation').addEventListener('click', () => {
   useManualLocation = false;
   updateLocationInput();
+});
+
+document.querySelector('#alarmCenterBtn').addEventListener('click', openAlarmCenter);
+document.querySelector('#alarmCenterClose').addEventListener('click', closeAlarmCenter);
+document.querySelector('#alarmCenterOverlay').addEventListener('click', (e) => {
+  if (e.target.id === 'alarmCenterOverlay') closeAlarmCenter();
+});
+
+document.querySelector('#alarmStatusFilter').addEventListener('change', (e) => {
+  alarmStatusFilter = e.target.value;
+  renderAlarmCenter();
+});
+document.querySelector('#alarmTypeFilter').addEventListener('change', (e) => {
+  alarmTypeFilter = e.target.value;
+  renderAlarmCenter();
+});
+document.querySelector('#recalculateAlarmsBtn').addEventListener('click', () => {
+  recalculateAlarms();
+  renderAlarmCenter();
+});
+document.querySelector('#resetAlarmConfig').addEventListener('click', () => {
+  alarmConfig = { ...defaultAlarmConfig };
+  saveAlarmConfig();
+  loadAlarmConfig();
+  recalculateAlarms();
+  renderAlarmCenter();
+});
+document.querySelector('#saveAlarmConfig').addEventListener('click', () => {
+  const multipleExceedThreshold = parseInt(document.querySelector('#multipleExceedThreshold').value);
+  const nightStartHour = parseInt(document.querySelector('#nightStartHour').value);
+  const nightEndHour = parseInt(document.querySelector('#nightEndHour').value);
+  const nightNoiseThreshold = parseInt(document.querySelector('#nightNoiseThreshold').value);
+
+  if (isNaN(multipleExceedThreshold) || multipleExceedThreshold < 2 || multipleExceedThreshold > 10) {
+    alert('日内多次超标阈值必须在2-10之间');
+    return;
+  }
+  if (isNaN(nightStartHour) || nightStartHour < 0 || nightStartHour > 23) {
+    alert('夜间开始时间必须在0-23之间');
+    return;
+  }
+  if (isNaN(nightEndHour) || nightEndHour < 0 || nightEndHour > 23) {
+    alert('夜间结束时间必须在0-23之间');
+    return;
+  }
+  if (isNaN(nightNoiseThreshold) || nightNoiseThreshold < 20 || nightNoiseThreshold > 130) {
+    alert('夜间噪声阈值必须在20-130之间');
+    return;
+  }
+
+  alarmConfig = { multipleExceedThreshold, nightStartHour, nightEndHour, nightNoiseThreshold };
+  saveAlarmConfig();
+  recalculateAlarms();
+  renderAlarmCenter();
+  alert('告警配置已保存');
 });
 
 document.querySelector('#monitoringPointsBtn').addEventListener('click', openMonitoringPointPanel);
@@ -461,6 +617,7 @@ document.querySelector('#reset').addEventListener('click', () => {
   monitoringPoints = defaultMonitoringPoints;
   save();
   saveMonitoringPoints();
+  recalculateAlarms();
   updateMonitoringPointSelects();
   render();
 });
@@ -501,6 +658,7 @@ document.querySelector('#lowReferenceInput').addEventListener('input', (e) => {
 document.querySelector('#resetThresholds').addEventListener('click', () => {
   thresholds = { ...defaultThresholds };
   saveThresholds();
+  recalculateAlarms();
   document.querySelector('#highNoiseRange').value = thresholds.highNoise;
   document.querySelector('#highNoiseInput').value = thresholds.highNoise;
   document.querySelector('#harshRange').value = thresholds.harsh;
@@ -531,6 +689,7 @@ document.querySelector('#saveThresholds').addEventListener('click', () => {
 
   thresholds = { highNoise, harsh, lowReference };
   saveThresholds();
+  recalculateAlarms();
   closeThresholdPanel();
   render();
 });
@@ -545,6 +704,187 @@ function saveThresholds() {
 
 function saveMonitoringPoints() {
   localStorage.setItem(monitoringPointsKey, JSON.stringify(monitoringPoints));
+}
+
+function saveAlarms() {
+  localStorage.setItem(alarmsKey, JSON.stringify(alarms));
+}
+
+function saveAlarmConfig() {
+  localStorage.setItem(alarmConfigKey, JSON.stringify(alarmConfig));
+}
+
+function isNighttime(datetimeStr) {
+  const hour = new Date(datetimeStr).getHours();
+  const { nightStartHour, nightEndHour } = alarmConfig;
+  if (nightStartHour < nightEndHour) {
+    return hour >= nightStartHour && hour < nightEndHour;
+  } else {
+    return hour >= nightStartHour || hour < nightEndHour;
+  }
+}
+
+function generateSingleExceedAlarms() {
+  const newAlarms = [];
+  records.forEach(record => {
+    if (record.db >= thresholds.harsh) {
+      const alarmId = `single-${record.id}`;
+      const existing = alarms.find(a => a.id === alarmId);
+      if (!existing) {
+        newAlarms.push({
+          id: alarmId,
+          type: 'single',
+          typeLabel: '单条超阈值',
+          status: 'pending',
+          recordId: record.id,
+          location: record.location,
+          at: record.at,
+          db: record.db,
+          source: record.source,
+          threshold: thresholds.harsh,
+          message: `记录噪声${record.db}dB超过刺耳阈值${thresholds.harsh}dB`,
+          createdAt: new Date().toISOString()
+        });
+      }
+    }
+  });
+  return newAlarms;
+}
+
+function generateMultipleExceedAlarms() {
+  const newAlarms = [];
+  const locationDayMap = new Map();
+  
+  records.forEach(record => {
+    if (record.db >= thresholds.highNoise) {
+      const day = record.at.slice(0, 10);
+      const key = `${record.location}-${day}`;
+      if (!locationDayMap.has(key)) {
+        locationDayMap.set(key, []);
+      }
+      locationDayMap.get(key).push(record);
+    }
+  });
+
+  const { multipleExceedThreshold } = alarmConfig;
+  locationDayMap.forEach((dayRecords, key) => {
+    if (dayRecords.length >= multipleExceedThreshold) {
+      const alarmId = `multiple-${key}`;
+      const existing = alarms.find(a => a.id === alarmId);
+      if (!existing) {
+        const maxDb = Math.max(...dayRecords.map(r => r.db));
+        const location = dayRecords[0].location;
+        const day = key.split('-').slice(1, 4).join('-');
+        newAlarms.push({
+          id: alarmId,
+          type: 'multiple',
+          typeLabel: '日内多次超标',
+          status: 'pending',
+          location,
+          day,
+          recordCount: dayRecords.length,
+          maxDb,
+          threshold: multipleExceedThreshold,
+          noiseThreshold: thresholds.highNoise,
+          recordIds: dayRecords.map(r => r.id),
+          message: `${location}在${day}共有${dayRecords.length}条记录超过高噪声阈值${thresholds.highNoise}dB，最高${maxDb}dB`,
+          createdAt: new Date().toISOString()
+        });
+      }
+    }
+  });
+  return newAlarms;
+}
+
+function generateNighttimeAlarms() {
+  const newAlarms = [];
+  records.forEach(record => {
+    if (isNighttime(record.at) && record.db >= alarmConfig.nightNoiseThreshold) {
+      const alarmId = `nighttime-${record.id}`;
+      const existing = alarms.find(a => a.id === alarmId);
+      if (!existing) {
+        newAlarms.push({
+          id: alarmId,
+          type: 'nighttime',
+          typeLabel: '夜间高噪声',
+          status: 'pending',
+          recordId: record.id,
+          location: record.location,
+          at: record.at,
+          db: record.db,
+          source: record.source,
+          threshold: alarmConfig.nightNoiseThreshold,
+          nightHours: `${alarmConfig.nightStartHour}:00-${alarmConfig.nightEndHour}:00`,
+          message: `夜间时段${record.at.slice(11, 16)}记录噪声${record.db}dB超过夜间阈值${alarmConfig.nightNoiseThreshold}dB`,
+          createdAt: new Date().toISOString()
+        });
+      }
+    }
+  });
+  return newAlarms;
+}
+
+function recalculateAlarms() {
+  const existingPending = alarms.filter(a => a.status === 'pending');
+  const existingConfirmed = alarms.filter(a => a.status === 'confirmed');
+  const existingIgnored = alarms.filter(a => a.status === 'ignored');
+  
+  const singleAlarms = generateSingleExceedAlarms();
+  const multipleAlarms = generateMultipleExceedAlarms();
+  const nighttimeAlarms = generateNighttimeAlarms();
+  
+  function isAlarmStillValid(a) {
+    if (a.type === 'single') {
+      const record = records.find(r => r.id === a.recordId);
+      return record && record.db >= thresholds.harsh;
+    }
+    if (a.type === 'multiple') {
+      const dayRecords = records.filter(r => 
+        r.location === a.location && 
+        r.at.startsWith(a.day) && 
+        r.db >= thresholds.highNoise
+      );
+      return dayRecords.length >= alarmConfig.multipleExceedThreshold;
+    }
+    if (a.type === 'nighttime') {
+      const record = records.find(r => r.id === a.recordId);
+      return record && isNighttime(record.at) && record.db >= alarmConfig.nightNoiseThreshold;
+    }
+    return false;
+  }
+  
+  const stillValidPending = existingPending.filter(isAlarmStillValid);
+  const stillValidConfirmed = existingConfirmed.filter(isAlarmStillValid);
+  const stillValidIgnored = existingIgnored.filter(isAlarmStillValid);
+  
+  const existingIds = new Set([
+    ...stillValidPending.map(a => a.id),
+    ...stillValidConfirmed.map(a => a.id),
+    ...stillValidIgnored.map(a => a.id)
+  ]);
+  
+  const newAlarms = [
+    ...singleAlarms,
+    ...multipleAlarms,
+    ...nighttimeAlarms
+  ].filter(a => !existingIds.has(a.id));
+  
+  alarms = [
+    ...newAlarms,
+    ...stillValidPending,
+    ...stillValidConfirmed,
+    ...stillValidIgnored
+  ];
+  
+  saveAlarms();
+}
+
+function updateAlarmStatus(alarmId, status) {
+  alarms = alarms.map(a => 
+    a.id === alarmId ? { ...a, status, updatedAt: new Date().toISOString() } : a
+  );
+  saveAlarms();
+  renderAlarmCenter();
 }
 
 function getMonitoringPointById(id) {
@@ -681,6 +1021,7 @@ function renderMonitoringPointsList() {
         monitoringPoints = monitoringPoints.filter(p => p.id !== pointId);
         save();
         saveMonitoringPoints();
+        recalculateAlarms();
         renderMonitoringPointsList();
         updateMonitoringPointSelects();
         render();
@@ -793,6 +1134,7 @@ function render() {
   document.querySelectorAll('[data-del]').forEach((button) => button.addEventListener('click', () => {
     records = records.filter((record) => record.id !== button.dataset.del);
     save();
+    recalculateAlarms();
     render();
   }));
   document.querySelectorAll('[data-edit]').forEach((button) => button.addEventListener('click', () => {
@@ -1019,6 +1361,126 @@ function closeLocationDetail() {
   document.body.style.overflow = '';
 }
 
+function openAlarmCenter() {
+  document.querySelector('#alarmCenterOverlay').classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+  recalculateAlarms();
+  loadAlarmConfig();
+  renderAlarmCenter();
+}
+
+function closeAlarmCenter() {
+  document.querySelector('#alarmCenterOverlay').classList.add('hidden');
+  document.body.style.overflow = '';
+}
+
+function loadAlarmConfig() {
+  document.querySelector('#multipleExceedThreshold').value = alarmConfig.multipleExceedThreshold;
+  document.querySelector('#nightStartHour').value = alarmConfig.nightStartHour;
+  document.querySelector('#nightEndHour').value = alarmConfig.nightEndHour;
+  document.querySelector('#nightNoiseThreshold').value = alarmConfig.nightNoiseThreshold;
+  document.querySelector('#alarmStatusFilter').value = alarmStatusFilter;
+  document.querySelector('#alarmTypeFilter').value = alarmTypeFilter;
+}
+
+function renderAlarmCenter() {
+  const pending = alarms.filter(a => a.status === 'pending').length;
+  const confirmed = alarms.filter(a => a.status === 'confirmed').length;
+  const ignored = alarms.filter(a => a.status === 'ignored').length;
+  
+  document.querySelector('#alarmPendingCount').textContent = pending;
+  document.querySelector('#alarmConfirmedCount').textContent = confirmed;
+  document.querySelector('#alarmIgnoredCount').textContent = ignored;
+  document.querySelector('#alarmTotalCount').textContent = alarms.length;
+  
+  let filteredAlarms = [...alarms];
+  
+  if (alarmStatusFilter !== 'all') {
+    filteredAlarms = filteredAlarms.filter(a => a.status === alarmStatusFilter);
+  }
+  
+  if (alarmTypeFilter !== 'all') {
+    filteredAlarms = filteredAlarms.filter(a => a.type === alarmTypeFilter);
+  }
+  
+  filteredAlarms.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  
+  const alarmListEl = document.querySelector('#alarmList');
+  
+  if (!filteredAlarms.length) {
+    alarmListEl.innerHTML = '<p class="empty">暂无告警记录</p>';
+    return;
+  }
+  
+  alarmListEl.innerHTML = filteredAlarms.map(alarm => {
+    const statusClass = `alarm-status-${alarm.status}`;
+    const typeClass = `alarm-type-${alarm.type}`;
+    const statusLabel = {
+      pending: '待处理',
+      confirmed: '已确认',
+      ignored: '已忽略'
+    }[alarm.status];
+    
+    let detailInfo = '';
+    if (alarm.type === 'single' || alarm.type === 'nighttime') {
+      detailInfo = `
+        <div class="alarm-detail">
+          <span>时间：${alarm.at.replace('T', ' ')}</span>
+          <span>来源：${alarm.source}</span>
+          <span>阈值：${alarm.threshold}dB</span>
+        </div>
+      `;
+    } else if (alarm.type === 'multiple') {
+      detailInfo = `
+        <div class="alarm-detail">
+          <span>日期：${alarm.day}</span>
+          <span>超标次数：${alarm.recordCount}次</span>
+          <span>最高分贝：${alarm.maxDb}dB</span>
+          <span>噪声阈值：${alarm.noiseThreshold}dB</span>
+        </div>
+      `;
+    }
+    
+    return `
+      <div class="alarm-item ${statusClass} ${typeClass}">
+        <div class="alarm-header">
+          <div class="alarm-title">
+            <span class="alarm-type-badge">${alarm.typeLabel}</span>
+            <span class="alarm-location">${alarm.location}</span>
+          </div>
+          <span class="alarm-db">${alarm.db || alarm.maxDb}dB</span>
+        </div>
+        <div class="alarm-message">${alarm.message}</div>
+        ${detailInfo}
+        <div class="alarm-footer">
+          <span class="alarm-status-badge ${statusClass}">${statusLabel}</span>
+          <span class="alarm-time">生成于 ${new Date(alarm.createdAt).toLocaleString('zh-CN')}</span>
+          <div class="alarm-actions">
+            ${alarm.status === 'pending' ? `
+              <button class="secondary" data-confirm="${alarm.id}">确认</button>
+              <button class="secondary" data-ignore="${alarm.id}">忽略</button>
+            ` : alarm.status === 'confirmed' ? `
+              <button class="secondary" data-reopen="${alarm.id}">重新打开</button>
+            ` : `
+              <button class="secondary" data-reopen="${alarm.id}">重新打开</button>
+            `}
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
+  
+  alarmListEl.querySelectorAll('[data-confirm]').forEach(btn => {
+    btn.addEventListener('click', () => updateAlarmStatus(btn.dataset.confirm, 'confirmed'));
+  });
+  alarmListEl.querySelectorAll('[data-ignore]').forEach(btn => {
+    btn.addEventListener('click', () => updateAlarmStatus(btn.dataset.ignore, 'ignored'));
+  });
+  alarmListEl.querySelectorAll('[data-reopen]').forEach(btn => {
+    btn.addEventListener('click', () => updateAlarmStatus(btn.dataset.reopen, 'pending'));
+  });
+}
+
 function calculateLocationStats(locationRecords) {
   const dbs = locationRecords.map((r) => r.db);
   return {
@@ -1052,7 +1514,9 @@ document.querySelector('#locationDetailOverlay').addEventListener('click', (e) =
 });
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
-    if (!document.querySelector('#monitoringPointOverlay').classList.contains('hidden')) {
+    if (!document.querySelector('#alarmCenterOverlay').classList.contains('hidden')) {
+      closeAlarmCenter();
+    } else if (!document.querySelector('#monitoringPointOverlay').classList.contains('hidden')) {
       closeMonitoringPointPanel();
     } else if (!document.querySelector('#thresholdOverlay').classList.contains('hidden')) {
       closeThresholdPanel();
@@ -1548,9 +2012,11 @@ function confirmImport() {
   if (!importData || !importData.validRecords.length) return;
   records = [...importData.validRecords, ...records];
   save();
+  recalculateAlarms();
   render();
   resetImport();
   alert(`成功导入${importData.validRecords.length}条记录`);
 }
 
+recalculateAlarms();
 render();
