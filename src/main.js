@@ -47,6 +47,40 @@ document.querySelector('#app').innerHTML = `
       </section>
     </section>
 
+    <section class="panel import-panel">
+      <div class="panelHead">
+        <h2>数据导入</h2>
+        <span class="import-hint">支持 CSV、JSON 格式</span>
+      </div>
+      <div id="importArea" class="import-area">
+        <input type="file" id="fileInput" accept=".csv,.json" hidden />
+        <div class="import-drop" id="importDrop">
+          <p class="import-icon">📁</p>
+          <p>点击选择文件或拖拽到此处</p>
+          <p class="import-tip">字段：地点、时间、分贝、来源、主观感受</p>
+        </div>
+      </div>
+      <div id="importPreview" class="import-preview hidden">
+        <div class="preview-summary">
+          <div class="preview-stat"><span>识别字段</span><strong id="fieldCount">0</strong></div>
+          <div class="preview-stat"><span>可导入行数</span><strong id="validCount">0</strong></div>
+          <div class="preview-stat"><span>错误行数</span><strong id="errorCount">0</strong></div>
+        </div>
+        <div class="preview-fields" id="fieldMapping"></div>
+        <div class="preview-errors" id="errorSummary"></div>
+        <div class="preview-table-wrap">
+          <h3>数据预览</h3>
+          <div class="tableWrap">
+            <table><thead id="previewHead"></thead><tbody id="previewBody"></tbody></table>
+          </div>
+        </div>
+        <div class="preview-actions">
+          <button id="cancelImport" class="secondary">取消</button>
+          <button id="confirmImport" class="primary">确认导入</button>
+        </div>
+      </div>
+    </section>
+
     <section class="cards">
       <div class="panel"><h2>地点平均噪声</h2><div class="chart small" id="locations"></div></div>
       <div class="panel"><h2>高噪声记录</h2><div id="hotList"></div></div>
@@ -138,6 +172,278 @@ function drawBars(selector, data, unit) {
   if (!data.length) return (el.innerHTML = '<p class="empty">暂无数据</p>');
   const max = Math.max(...data.map((item) => item.value), 1);
   el.innerHTML = `<svg viewBox="0 0 500 220">${data.map((item, index) => `<text x="18" y="${44 + index * 42}">${item.label}</text><rect x="150" y="${24 + index * 42}" width="${(item.value / max) * 300}" height="22" rx="4"/><text x="${160 + (item.value / max) * 300}" y="${42 + index * 42}">${Math.round(item.value)}${unit}</text>`).join('')}</svg>`;
+}
+
+let importData = null;
+const fileInput = document.querySelector('#fileInput');
+const importDrop = document.querySelector('#importDrop');
+const importArea = document.querySelector('#importArea');
+const importPreview = document.querySelector('#importPreview');
+const cancelImportBtn = document.querySelector('#cancelImport');
+const confirmImportBtn = document.querySelector('#confirmImport');
+
+const fieldMappingConfig = {
+  location: ['地点', 'location', 'place', '地址', '位置', '街区'],
+  at: ['时间', 'at', 'datetime', 'date', 'timestamp', '观测时间', '记录时间'],
+  db: ['分贝', 'db', 'noise', '声级', '音量', '噪声值'],
+  source: ['来源', 'source', 'origin', '噪声源', '噪声来源'],
+  feeling: ['主观感受', 'feeling', '感受', '评价', '主观评价']
+};
+
+const validFeelings = ['安静', '可接受', '偏吵', '嘈杂', '刺耳'];
+
+importDrop.addEventListener('click', () => fileInput.click());
+importDrop.addEventListener('dragover', (e) => {
+  e.preventDefault();
+  importDrop.classList.add('dragover');
+});
+importDrop.addEventListener('dragleave', () => importDrop.classList.remove('dragover'));
+importDrop.addEventListener('drop', (e) => {
+  e.preventDefault();
+  importDrop.classList.remove('dragover');
+  if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', (e) => {
+  if (e.target.files.length) handleFile(e.target.files[0]);
+});
+cancelImportBtn.addEventListener('click', resetImport);
+confirmImportBtn.addEventListener('click', confirmImport);
+
+function handleFile(file) {
+  const ext = file.name.split('.').pop().toLowerCase();
+  if (!['csv', 'json'].includes(ext)) {
+    alert('仅支持 CSV 或 JSON 格式文件');
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const content = e.target.result;
+      let rawData;
+      if (ext === 'json') {
+        rawData = JSON.parse(content);
+        if (!Array.isArray(rawData)) rawData = [rawData];
+      } else {
+        rawData = parseCSV(content);
+      }
+      processImportData(rawData);
+    } catch (err) {
+      alert('文件解析失败：' + err.message);
+    }
+  };
+  reader.readAsText(file);
+}
+
+function parseCSV(content) {
+  const lines = content.trim().split(/\r?\n/);
+  if (!lines.length) return [];
+  const headers = parseCSVLine(lines[0]);
+  return lines.slice(1).map(line => {
+    const values = parseCSVLine(line);
+    const obj = {};
+    headers.forEach((header, i) => obj[header] = values[i] || '');
+    return obj;
+  });
+}
+
+function parseCSVLine(line) {
+  const result = [];
+  let current = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+    if (char === '"') {
+      inQuotes = !inQuotes;
+    } else if (char === ',' && !inQuotes) {
+      result.push(current.trim());
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  result.push(current.trim());
+  return result;
+}
+
+function mapFields(rawRecord) {
+  const mapping = {};
+  const detectedFields = {};
+  Object.keys(rawRecord).forEach(key => {
+    const lowerKey = key.toLowerCase().trim();
+    for (const [field, aliases] of Object.entries(fieldMappingConfig)) {
+      if (aliases.some(alias => lowerKey === alias.toLowerCase() || lowerKey.includes(alias.toLowerCase()))) {
+        mapping[field] = key;
+        detectedFields[field] = key;
+        break;
+      }
+    }
+  });
+  return { mapping, detectedFields };
+}
+
+function validateRecord(record, mapping, lineNum) {
+  const errors = [];
+  const result = { id: crypto.randomUUID() };
+
+  const requiredFields = ['location', 'at', 'db', 'source', 'feeling'];
+  requiredFields.forEach(field => {
+    if (!mapping[field]) {
+      errors.push(`缺少字段"${fieldMappingConfig[field][0]}"`);
+      return;
+    }
+    const rawValue = record[mapping[field]];
+    if (rawValue === undefined || rawValue === null || rawValue.toString().trim() === '') {
+      errors.push(`"${fieldMappingConfig[field][0]}"不能为空`);
+      return;
+    }
+    result[field] = rawValue.toString().trim();
+  });
+
+  if (errors.length) return { valid: false, errors, lineNum };
+
+  const dbNum = Number(result.db);
+  if (isNaN(dbNum) || dbNum < 20 || dbNum > 130) {
+    errors.push(`分贝值"${result.db}"必须在20-130之间`);
+  } else {
+    result.db = dbNum;
+  }
+
+  if (!validFeelings.includes(result.feeling)) {
+    errors.push(`主观感受"${result.feeling}"必须是：${validFeelings.join('、')}`);
+  }
+
+  const datePattern = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?$/;
+  if (!datePattern.test(result.at)) {
+    errors.push(`时间格式"${result.at}"不正确，应为YYYY-MM-DD HH:MM格式`);
+  } else {
+    result.at = result.at.replace(' ', 'T');
+  }
+
+  return { valid: errors.length === 0, errors, record: result, lineNum };
+}
+
+function processImportData(rawData) {
+  if (!rawData.length) {
+    alert('文件中没有数据');
+    return;
+  }
+
+  const allFields = new Set();
+  rawData.forEach(record => Object.keys(record).forEach(key => allFields.add(key)));
+  const { mapping, detectedFields } = mapFields(Object.fromEntries([...allFields].map(k => [k, ''])));
+  const validRecords = [];
+  const errorRecords = [];
+  const allDetectedFields = { ...detectedFields };
+
+  rawData.forEach((record, index) => {
+    const recordMapping = buildRecordMapping(record);
+    Object.entries(recordMapping).forEach(([field, key]) => {
+      if (!allDetectedFields[field]) allDetectedFields[field] = key;
+    });
+    const result = validateRecord(record, recordMapping, index + 2);
+    if (result.valid) {
+      validRecords.push(result.record);
+    } else {
+      errorRecords.push(result);
+    }
+  });
+
+  importData = { validRecords, errorRecords, detectedFields: allDetectedFields, mapping, rawData };
+  showPreview();
+}
+
+function buildRecordMapping(record) {
+  const recordKeys = Object.keys(record);
+  const mapping = {};
+  for (const [field, aliases] of Object.entries(fieldMappingConfig)) {
+    for (const alias of aliases) {
+      const lowerAlias = alias.toLowerCase();
+      const match = recordKeys.find(k => {
+        const lowerKey = k.toLowerCase().trim();
+        return lowerKey === lowerAlias || lowerKey.includes(lowerAlias);
+      });
+      if (match) {
+        mapping[field] = match;
+        break;
+      }
+    }
+  }
+  return mapping;
+}
+
+function showPreview() {
+  importArea.classList.add('hidden');
+  importPreview.classList.remove('hidden');
+
+  document.querySelector('#fieldCount').textContent = Object.keys(importData.detectedFields).length;
+  document.querySelector('#validCount').textContent = importData.validRecords.length;
+  document.querySelector('#errorCount').textContent = importData.errorRecords.length;
+
+  const fieldMappingEl = document.querySelector('#fieldMapping');
+  fieldMappingEl.innerHTML = `
+    <h3>字段识别结果</h3>
+    <div class="field-list">
+      ${Object.entries(fieldMappingConfig).map(([field, aliases]) => {
+        const mapped = importData.detectedFields[field];
+        return `<div class="field-item ${mapped ? 'mapped' : 'unmapped'}">
+          <span class="field-name">${aliases[0]}</span>
+          <span class="field-arrow">→</span>
+          <span class="field-source">${mapped || '未识别'}</span>
+        </div>`;
+      }).join('')}
+    </div>
+  `;
+
+  const errorSummaryEl = document.querySelector('#errorSummary');
+  if (importData.errorRecords.length) {
+    const errorPreview = importData.errorRecords.slice(0, 5);
+    errorSummaryEl.innerHTML = `
+      <h3>错误行摘要</h3>
+      <ul class="error-list">
+        ${errorPreview.map(err => `<li><strong>第${err.lineNum}行：</strong>${err.errors.join('；')}</li>`).join('')}
+        ${importData.errorRecords.length > 5 ? `<li class="more-errors">...还有${importData.errorRecords.length - 5}条错误</li>` : ''}
+      </ul>
+    `;
+  } else {
+    errorSummaryEl.innerHTML = '';
+  }
+
+  const previewHead = document.querySelector('#previewHead');
+  const previewBody = document.querySelector('#previewBody');
+  const previewRecords = importData.validRecords.slice(0, 10);
+
+  previewHead.innerHTML = `<tr><th>时间</th><th>地点</th><th>分贝</th><th>来源</th><th>感受</th></tr>`;
+  previewBody.innerHTML = previewRecords.map(record => `
+    <tr>
+      <td>${record.at.replace('T', ' ')}</td>
+      <td>${record.location}</td>
+      <td>${record.db}dB</td>
+      <td>${record.source}</td>
+      <td>${record.feeling}</td>
+    </tr>
+  `).join('');
+
+  if (importData.validRecords.length > 10) {
+    previewBody.innerHTML += `<tr><td colspan="5" class="more-rows">...还有${importData.validRecords.length - 10}条记录</td></tr>`;
+  }
+
+  document.querySelector('#confirmImport').disabled = importData.validRecords.length === 0;
+}
+
+function resetImport() {
+  importData = null;
+  fileInput.value = '';
+  importArea.classList.remove('hidden');
+  importPreview.classList.add('hidden');
+}
+
+function confirmImport() {
+  if (!importData || !importData.validRecords.length) return;
+  records = [...importData.validRecords, ...records];
+  save();
+  render();
+  resetImport();
+  alert(`成功导入${importData.validRecords.length}条记录`);
 }
 
 render();
