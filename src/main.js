@@ -729,23 +729,20 @@ function generateSingleExceedAlarms() {
   records.forEach(record => {
     if (record.db >= thresholds.harsh) {
       const alarmId = `single-${record.id}`;
-      const existing = alarms.find(a => a.id === alarmId);
-      if (!existing) {
-        newAlarms.push({
-          id: alarmId,
-          type: 'single',
-          typeLabel: '单条超阈值',
-          status: 'pending',
-          recordId: record.id,
-          location: record.location,
-          at: record.at,
-          db: record.db,
-          source: record.source,
-          threshold: thresholds.harsh,
-          message: `记录噪声${record.db}dB超过刺耳阈值${thresholds.harsh}dB`,
-          createdAt: new Date().toISOString()
-        });
-      }
+      newAlarms.push({
+        id: alarmId,
+        type: 'single',
+        typeLabel: '单条超阈值',
+        status: 'pending',
+        recordId: record.id,
+        location: record.location,
+        at: record.at,
+        db: record.db,
+        source: record.source,
+        threshold: thresholds.harsh,
+        message: `记录噪声${record.db}dB超过刺耳阈值${thresholds.harsh}dB`,
+        createdAt: new Date().toISOString()
+      });
     }
   });
   return newAlarms;
@@ -754,7 +751,7 @@ function generateSingleExceedAlarms() {
 function generateMultipleExceedAlarms() {
   const newAlarms = [];
   const locationDayMap = new Map();
-  
+
   records.forEach(record => {
     if (record.db >= thresholds.highNoise) {
       const day = record.at.slice(0, 10);
@@ -770,27 +767,24 @@ function generateMultipleExceedAlarms() {
   locationDayMap.forEach((dayRecords, key) => {
     if (dayRecords.length >= multipleExceedThreshold) {
       const alarmId = `multiple-${key}`;
-      const existing = alarms.find(a => a.id === alarmId);
-      if (!existing) {
-        const maxDb = Math.max(...dayRecords.map(r => r.db));
-        const location = dayRecords[0].location;
-        const day = key.split('-').slice(1, 4).join('-');
-        newAlarms.push({
-          id: alarmId,
-          type: 'multiple',
-          typeLabel: '日内多次超标',
-          status: 'pending',
-          location,
-          day,
-          recordCount: dayRecords.length,
-          maxDb,
-          threshold: multipleExceedThreshold,
-          noiseThreshold: thresholds.highNoise,
-          recordIds: dayRecords.map(r => r.id),
-          message: `${location}在${day}共有${dayRecords.length}条记录超过高噪声阈值${thresholds.highNoise}dB，最高${maxDb}dB`,
-          createdAt: new Date().toISOString()
-        });
-      }
+      const maxDb = Math.max(...dayRecords.map(r => r.db));
+      const location = dayRecords[0].location;
+      const day = key.split('-').slice(1, 4).join('-');
+      newAlarms.push({
+        id: alarmId,
+        type: 'multiple',
+        typeLabel: '日内多次超标',
+        status: 'pending',
+        location,
+        day,
+        recordCount: dayRecords.length,
+        maxDb,
+        threshold: multipleExceedThreshold,
+        noiseThreshold: thresholds.highNoise,
+        recordIds: dayRecords.map(r => r.id),
+        message: `${location}在${day}共有${dayRecords.length}条记录超过高噪声阈值${thresholds.highNoise}dB，最高${maxDb}dB`,
+        createdAt: new Date().toISOString()
+      });
     }
   });
   return newAlarms;
@@ -801,86 +795,53 @@ function generateNighttimeAlarms() {
   records.forEach(record => {
     if (isNighttime(record.at) && record.db >= alarmConfig.nightNoiseThreshold) {
       const alarmId = `nighttime-${record.id}`;
-      const existing = alarms.find(a => a.id === alarmId);
-      if (!existing) {
-        newAlarms.push({
-          id: alarmId,
-          type: 'nighttime',
-          typeLabel: '夜间高噪声',
-          status: 'pending',
-          recordId: record.id,
-          location: record.location,
-          at: record.at,
-          db: record.db,
-          source: record.source,
-          threshold: alarmConfig.nightNoiseThreshold,
-          nightHours: `${alarmConfig.nightStartHour}:00-${alarmConfig.nightEndHour}:00`,
-          message: `夜间时段${record.at.slice(11, 16)}记录噪声${record.db}dB超过夜间阈值${alarmConfig.nightNoiseThreshold}dB`,
-          createdAt: new Date().toISOString()
-        });
-      }
+      newAlarms.push({
+        id: alarmId,
+        type: 'nighttime',
+        typeLabel: '夜间高噪声',
+        status: 'pending',
+        recordId: record.id,
+        location: record.location,
+        at: record.at,
+        db: record.db,
+        source: record.source,
+        threshold: alarmConfig.nightNoiseThreshold,
+        nightHours: `${alarmConfig.nightStartHour}:00-${alarmConfig.nightEndHour}:00`,
+        message: `夜间时段${record.at.slice(11, 16)}记录噪声${record.db}dB超过夜间阈值${alarmConfig.nightNoiseThreshold}dB`,
+        createdAt: new Date().toISOString()
+      });
     }
   });
   return newAlarms;
 }
 
 function recalculateAlarms() {
-  const existingPending = alarms.filter(a => a.status === 'pending');
-  const existingConfirmed = alarms.filter(a => a.status === 'confirmed');
-  const existingIgnored = alarms.filter(a => a.status === 'ignored');
-  
+  const existingAlarmMap = new Map(alarms.map(alarm => [alarm.id, alarm]));
   const singleAlarms = generateSingleExceedAlarms();
   const multipleAlarms = generateMultipleExceedAlarms();
   const nighttimeAlarms = generateNighttimeAlarms();
-  
-  function isAlarmStillValid(a) {
-    if (a.type === 'single') {
-      const record = records.find(r => r.id === a.recordId);
-      return record && record.db >= thresholds.harsh;
-    }
-    if (a.type === 'multiple') {
-      const dayRecords = records.filter(r => 
-        r.location === a.location && 
-        r.at.startsWith(a.day) && 
-        r.db >= thresholds.highNoise
-      );
-      return dayRecords.length >= alarmConfig.multipleExceedThreshold;
-    }
-    if (a.type === 'nighttime') {
-      const record = records.find(r => r.id === a.recordId);
-      return record && isNighttime(record.at) && record.db >= alarmConfig.nightNoiseThreshold;
-    }
-    return false;
-  }
-  
-  const stillValidPending = existingPending.filter(isAlarmStillValid);
-  const stillValidConfirmed = existingConfirmed.filter(isAlarmStillValid);
-  const stillValidIgnored = existingIgnored.filter(isAlarmStillValid);
-  
-  const existingIds = new Set([
-    ...stillValidPending.map(a => a.id),
-    ...stillValidConfirmed.map(a => a.id),
-    ...stillValidIgnored.map(a => a.id)
-  ]);
-  
-  const newAlarms = [
+
+  alarms = [
     ...singleAlarms,
     ...multipleAlarms,
     ...nighttimeAlarms
-  ].filter(a => !existingIds.has(a.id));
-  
-  alarms = [
-    ...newAlarms,
-    ...stillValidPending,
-    ...stillValidConfirmed,
-    ...stillValidIgnored
-  ];
-  
+  ].map(alarm => {
+    const existing = existingAlarmMap.get(alarm.id);
+    if (!existing) return alarm;
+
+    return {
+      ...alarm,
+      status: existing.status,
+      createdAt: existing.createdAt,
+      updatedAt: existing.updatedAt
+    };
+  });
+
   saveAlarms();
 }
 
 function updateAlarmStatus(alarmId, status) {
-  alarms = alarms.map(a => 
+  alarms = alarms.map(a =>
     a.id === alarmId ? { ...a, status, updatedAt: new Date().toISOString() } : a
   );
   saveAlarms();
