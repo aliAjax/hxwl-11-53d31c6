@@ -117,6 +117,36 @@ document.querySelector('#app').innerHTML = `
         </div>
       </div>
     </section>
+
+    <div class="location-detail-overlay hidden" id="locationDetailOverlay">
+      <div class="location-detail-panel" id="locationDetailPanel">
+        <div class="location-detail-header">
+          <h2 id="locationDetailTitle">地点详情</h2>
+          <button class="location-detail-close" id="locationDetailClose">&times;</button>
+        </div>
+        <div class="location-detail-stats" id="locationDetailStats"></div>
+        <div class="location-detail-chart">
+          <h3>分贝变化趋势</h3>
+          <div class="chart" id="locationDetailChart"></div>
+        </div>
+        <div class="location-detail-records">
+          <h3>历史记录</h3>
+          <div class="tableWrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>时间</th>
+                  <th>分贝</th>
+                  <th>来源</th>
+                  <th>感受</th>
+                </tr>
+              </thead>
+              <tbody id="locationDetailRows"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
   </main>
 `;
 
@@ -159,7 +189,10 @@ function render() {
   drawLine('#daily', dayRecords.map((record) => ({ label: record.at.slice(11, 16), value: record.db })), 'dB');
   drawBars('#locations', grouped(filtered), 'dB');
   document.querySelector('#hotList').innerHTML = filtered.filter((record) => record.db >= 70).sort((a, b) => b.db - a.db).slice(0, 6).map((record) => `<div class="hot"><strong>${record.db}dB</strong><span>${record.location}</span><em>${record.source}</em></div>`).join('') || '<p class="empty">暂无高噪声记录</p>';
-  document.querySelector('#rows').innerHTML = filtered.sort((a, b) => b.at.localeCompare(a.at)).map((record) => `<tr><td>${record.at.replace('T', ' ')}</td><td>${record.location}</td><td>${record.db}dB</td><td>${record.source}</td><td>${record.feeling}</td><td><button data-edit="${record.id}">编辑</button><button data-del="${record.id}">删除</button></td></tr>`).join('');
+  document.querySelector('#rows').innerHTML = filtered.sort((a, b) => b.at.localeCompare(a.at)).map((record) => `<tr><td>${record.at.replace('T', ' ')}</td><td><span class="location-link" data-location="${record.location}">${record.location}</span></td><td>${record.db}dB</td><td>${record.source}</td><td>${record.feeling}</td><td><button data-edit="${record.id}">编辑</button><button data-del="${record.id}">删除</button></td></tr>`).join('');
+  document.querySelectorAll('.location-link').forEach((link) => {
+    link.addEventListener('click', () => openLocationDetail(link.dataset.location));
+  });
   document.querySelectorAll('[data-del]').forEach((button) => button.addEventListener('click', () => {
     records = records.filter((record) => record.id !== button.dataset.del);
     save();
@@ -198,8 +231,106 @@ function drawBars(selector, data, unit) {
   const el = document.querySelector(selector);
   if (!data.length) return (el.innerHTML = '<p class="empty">暂无数据</p>');
   const max = Math.max(...data.map((item) => item.value), 1);
-  el.innerHTML = `<svg viewBox="0 0 500 220">${data.map((item, index) => `<text x="18" y="${44 + index * 42}">${item.label}</text><rect x="150" y="${24 + index * 42}" width="${(item.value / max) * 300}" height="22" rx="4"/><text x="${160 + (item.value / max) * 300}" y="${42 + index * 42}">${Math.round(item.value)}${unit}</text>`).join('')}</svg>`;
+  el.innerHTML = `<svg viewBox="0 0 500 220">${data.map((item, index) => `<g class="location-bar" data-location="${item.label}" style="cursor: pointer;"><text x="18" y="${44 + index * 42}" fill="#d94636" text-decoration="underline">${item.label}</text><rect x="150" y="${24 + index * 42}" width="${(item.value / max) * 300}" height="22" rx="4"/><text x="${160 + (item.value / max) * 300}" y="${42 + index * 42}">${Math.round(item.value)}${unit}</text></g>`).join('')}</svg>`;
+  el.querySelectorAll('.location-bar').forEach((g) => {
+    g.addEventListener('click', () => openLocationDetail(g.dataset.location));
+  });
 }
+
+function openLocationDetail(location) {
+  const locationRecords = records
+    .filter((record) => record.location === location)
+    .sort((a, b) => a.at.localeCompare(b.at));
+
+  if (!locationRecords.length) return;
+
+  const stats = calculateLocationStats(locationRecords);
+  const mainSource = getMainSource(locationRecords.map((r) => r.source));
+
+  document.querySelector('#locationDetailTitle').textContent = `${location} · 噪声详情`;
+
+  document.querySelector('#locationDetailStats').innerHTML = `
+    <div class="stat-card">
+      <span class="stat-label">观测次数</span>
+      <strong class="stat-value">${stats.count}</strong>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">平均分贝</span>
+      <strong class="stat-value">${stats.avgDb.toFixed(1)}dB</strong>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">最高分贝</span>
+      <strong class="stat-value">${stats.maxDb}dB</strong>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">主要噪声来源</span>
+      <strong class="stat-value">${mainSource}</strong>
+    </div>
+  `;
+
+  const chartData = locationRecords.map((record) => ({
+    label: record.at.slice(5, 16).replace('T', ' '),
+    value: record.db
+  }));
+  drawLine('#locationDetailChart', chartData, 'dB');
+
+  document.querySelector('#locationDetailRows').innerHTML = locationRecords
+    .slice()
+    .reverse()
+    .map((record) => `
+      <tr>
+        <td>${record.at.replace('T', ' ')}</td>
+        <td>${record.db}dB</td>
+        <td>${record.source}</td>
+        <td>${record.feeling}</td>
+      </tr>
+    `).join('');
+
+  document.querySelector('#locationDetailOverlay').classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+}
+
+function closeLocationDetail() {
+  document.querySelector('#locationDetailOverlay').classList.add('hidden');
+  document.body.style.overflow = '';
+}
+
+function calculateLocationStats(locationRecords) {
+  const dbs = locationRecords.map((r) => r.db);
+  return {
+    count: locationRecords.length,
+    avgDb: average(dbs),
+    maxDb: Math.max(...dbs)
+  };
+}
+
+function getMainSource(sources) {
+  const countMap = new Map();
+  sources.forEach((source) => {
+    countMap.set(source, (countMap.get(source) || 0) + 1);
+  });
+  let maxCount = 0;
+  let mainSource = sources[0] || '未知';
+  countMap.forEach((count, source) => {
+    if (count > maxCount) {
+      maxCount = count;
+      mainSource = source;
+    }
+  });
+  return mainSource;
+}
+
+document.querySelector('#locationDetailClose').addEventListener('click', closeLocationDetail);
+document.querySelector('#locationDetailOverlay').addEventListener('click', (e) => {
+  if (e.target.id === 'locationDetailOverlay') {
+    closeLocationDetail();
+  }
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !document.querySelector('#locationDetailOverlay').classList.contains('hidden')) {
+    closeLocationDetail();
+  }
+});
 
 let importData = null;
 const fileInput = document.querySelector('#fileInput');
