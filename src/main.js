@@ -582,6 +582,12 @@ function updateMonitoringPointSelects() {
 
   monitoringPointSelect.innerHTML = `<option value="">选择监测点</option>${options}`;
   monitoringPointFilter.innerHTML = `<option value="">全部监测点</option>${options}`;
+  if (selectedMonitoringPointFilter && getMonitoringPointById(selectedMonitoringPointFilter)) {
+    monitoringPointFilter.value = selectedMonitoringPointFilter;
+  } else {
+    selectedMonitoringPointFilter = '';
+    monitoringPointFilter.value = '';
+  }
 }
 
 function openMonitoringPointPanel() {
