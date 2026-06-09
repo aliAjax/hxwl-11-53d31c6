@@ -1,6 +1,7 @@
 import './styles.css';
 
 const key = 'hxwl-11-noise-records';
+const thresholdKey = 'hxwl-11-noise-thresholds';
 const seed = [
   { id: crypto.randomUUID(), location: '老城菜市口', at: '2026-06-05T07:40', db: 76, source: '叫卖与卸货', feeling: '嘈杂' },
   { id: crypto.randomUUID(), location: '滨河步道', at: '2026-06-05T12:30', db: 58, source: '人流', feeling: '可接受' },
@@ -9,7 +10,14 @@ const seed = [
   { id: crypto.randomUUID(), location: '图书馆外', at: '2026-06-06T15:00', db: 49, source: '环境声', feeling: '安静' }
 ];
 
+const defaultThresholds = {
+  highNoise: 75,
+  harsh: 85,
+  lowReference: 50
+};
+
 let records = JSON.parse(localStorage.getItem(key) || 'null') || seed;
+let thresholds = JSON.parse(localStorage.getItem(thresholdKey) || 'null') || { ...defaultThresholds };
 let editingId = null;
 
 document.querySelector('#app').innerHTML = `
@@ -20,6 +28,7 @@ document.querySelector('#app').innerHTML = `
         <h1>城市噪声切片</h1>
       </div>
       <div class="topButtons">
+        <button id="thresholdBtn">阈值设置</button>
         <button id="reportBtn">生成报告</button>
         <button id="reset">载入示例</button>
       </div>
@@ -147,6 +156,90 @@ document.querySelector('#app').innerHTML = `
         </div>
       </div>
     </div>
+
+    <div class="threshold-overlay hidden" id="thresholdOverlay">
+      <div class="threshold-panel">
+        <div class="threshold-header">
+          <h2>噪声阈值设置</h2>
+          <button class="threshold-close" id="thresholdClose">&times;</button>
+        </div>
+        <div class="threshold-content">
+          <div class="threshold-item">
+            <label>
+              <span class="threshold-label">高噪声阈值</span>
+              <span class="threshold-desc">高于此值判定为高噪声，影响占比统计和记录筛选</span>
+            </label>
+            <div class="threshold-input-group">
+              <input type="range" id="highNoiseRange" min="60" max="90" step="1" />
+              <input type="number" id="highNoiseInput" min="20" max="130" />
+              <span class="threshold-unit">dB</span>
+            </div>
+            <div class="threshold-indicator high-noise"></div>
+          </div>
+          <div class="threshold-item">
+            <label>
+              <span class="threshold-label">刺耳阈值</span>
+              <span class="threshold-desc">高于此值标记为刺耳，图表和列表中特别高亮</span>
+            </label>
+            <div class="threshold-input-group">
+              <input type="range" id="harshRange" min="70" max="120" step="1" />
+              <input type="number" id="harshInput" min="20" max="130" />
+              <span class="threshold-unit">dB</span>
+            </div>
+            <div class="threshold-indicator harsh"></div>
+          </div>
+          <div class="threshold-item">
+            <label>
+              <span class="threshold-label">低噪声参考线</span>
+              <span class="threshold-desc">图表中的参考线，低于此值为安静环境</span>
+            </label>
+            <div class="threshold-input-group">
+              <input type="range" id="lowReferenceRange" min="20" max="70" step="1" />
+              <input type="number" id="lowReferenceInput" min="20" max="130" />
+              <span class="threshold-unit">dB</span>
+            </div>
+            <div class="threshold-indicator low-noise"></div>
+          </div>
+          <div class="threshold-preview">
+            <h4>当前配置预览</h4>
+            <div class="threshold-preview-bars">
+              <div class="preview-bar">
+                <span class="preview-bar-label">安静</span>
+                <div class="preview-bar-track">
+                  <div class="preview-bar-fill low" id="previewLow"></div>
+                </div>
+                <span class="preview-bar-value" id="previewLowValue">0-50dB</span>
+              </div>
+              <div class="preview-bar">
+                <span class="preview-bar-label">正常</span>
+                <div class="preview-bar-track">
+                  <div class="preview-bar-fill normal" id="previewNormal"></div>
+                </div>
+                <span class="preview-bar-value" id="previewNormalValue">50-75dB</span>
+              </div>
+              <div class="preview-bar">
+                <span class="preview-bar-label">高噪声</span>
+                <div class="preview-bar-track">
+                  <div class="preview-bar-fill high" id="previewHigh"></div>
+                </div>
+                <span class="preview-bar-value" id="previewHighValue">75-85dB</span>
+              </div>
+              <div class="preview-bar">
+                <span class="preview-bar-label">刺耳</span>
+                <div class="preview-bar-track">
+                  <div class="preview-bar-fill harsh" id="previewHarsh"></div>
+                </div>
+                <span class="preview-bar-value" id="previewHarshValue">85dB+</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="threshold-actions">
+          <button class="secondary" id="resetThresholds">恢复默认</button>
+          <button class="primary" id="saveThresholds">保存设置</button>
+        </div>
+      </div>
+    </div>
   </main>
 `;
 
@@ -172,8 +265,143 @@ document.querySelector('#reset').addEventListener('click', () => {
   render();
 });
 
+document.querySelector('#thresholdBtn').addEventListener('click', openThresholdPanel);
+document.querySelector('#thresholdClose').addEventListener('click', closeThresholdPanel);
+document.querySelector('#thresholdOverlay').addEventListener('click', (e) => {
+  if (e.target.id === 'thresholdOverlay') closeThresholdPanel();
+});
+
+document.querySelector('#highNoiseRange').addEventListener('input', (e) => {
+  document.querySelector('#highNoiseInput').value = e.target.value;
+  updateThresholdPreview();
+});
+document.querySelector('#highNoiseInput').addEventListener('input', (e) => {
+  document.querySelector('#highNoiseRange').value = e.target.value;
+  updateThresholdPreview();
+});
+
+document.querySelector('#harshRange').addEventListener('input', (e) => {
+  document.querySelector('#harshInput').value = e.target.value;
+  updateThresholdPreview();
+});
+document.querySelector('#harshInput').addEventListener('input', (e) => {
+  document.querySelector('#harshRange').value = e.target.value;
+  updateThresholdPreview();
+});
+
+document.querySelector('#lowReferenceRange').addEventListener('input', (e) => {
+  document.querySelector('#lowReferenceInput').value = e.target.value;
+  updateThresholdPreview();
+});
+document.querySelector('#lowReferenceInput').addEventListener('input', (e) => {
+  document.querySelector('#lowReferenceRange').value = e.target.value;
+  updateThresholdPreview();
+});
+
+document.querySelector('#resetThresholds').addEventListener('click', () => {
+  thresholds = { ...defaultThresholds };
+  saveThresholds();
+  document.querySelector('#highNoiseRange').value = thresholds.highNoise;
+  document.querySelector('#highNoiseInput').value = thresholds.highNoise;
+  document.querySelector('#harshRange').value = thresholds.harsh;
+  document.querySelector('#harshInput').value = thresholds.harsh;
+  document.querySelector('#lowReferenceRange').value = thresholds.lowReference;
+  document.querySelector('#lowReferenceInput').value = thresholds.lowReference;
+  updateThresholdPreview();
+  render();
+});
+
+document.querySelector('#saveThresholds').addEventListener('click', () => {
+  const highNoise = parseInt(document.querySelector('#highNoiseInput').value);
+  const harsh = parseInt(document.querySelector('#harshInput').value);
+  const lowReference = parseInt(document.querySelector('#lowReferenceInput').value);
+
+  if (isNaN(highNoise) || isNaN(harsh) || isNaN(lowReference)) {
+    alert('请输入有效的数值');
+    return;
+  }
+  if (lowReference >= highNoise) {
+    alert('低噪声参考线必须小于高噪声阈值');
+    return;
+  }
+  if (highNoise >= harsh) {
+    alert('高噪声阈值必须小于刺耳阈值');
+    return;
+  }
+
+  thresholds = { highNoise, harsh, lowReference };
+  saveThresholds();
+  closeThresholdPanel();
+  render();
+});
+
 function save() {
   localStorage.setItem(key, JSON.stringify(records));
+}
+
+function saveThresholds() {
+  localStorage.setItem(thresholdKey, JSON.stringify(thresholds));
+}
+
+function getNoiseLevel(db) {
+  if (db >= thresholds.harsh) return 'harsh';
+  if (db >= thresholds.highNoise) return 'high';
+  if (db >= thresholds.lowReference) return 'normal';
+  return 'low';
+}
+
+function getNoiseColor(db) {
+  const level = getNoiseLevel(db);
+  const colors = {
+    low: '#22c55e',
+    normal: '#eab308',
+    high: '#f97316',
+    harsh: '#d94636'
+  };
+  return colors[level];
+}
+
+function isHighNoise(db) {
+  return db >= thresholds.highNoise;
+}
+
+function openThresholdPanel() {
+  document.querySelector('#thresholdOverlay').classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+  document.querySelector('#highNoiseRange').value = thresholds.highNoise;
+  document.querySelector('#highNoiseInput').value = thresholds.highNoise;
+  document.querySelector('#harshRange').value = thresholds.harsh;
+  document.querySelector('#harshInput').value = thresholds.harsh;
+  document.querySelector('#lowReferenceRange').value = thresholds.lowReference;
+  document.querySelector('#lowReferenceInput').value = thresholds.lowReference;
+  updateThresholdPreview();
+}
+
+function closeThresholdPanel() {
+  document.querySelector('#thresholdOverlay').classList.add('hidden');
+  document.body.style.overflow = '';
+}
+
+function updateThresholdPreview() {
+  const low = parseInt(document.querySelector('#lowReferenceInput').value) || 50;
+  const high = parseInt(document.querySelector('#highNoiseInput').value) || 75;
+  const harsh = parseInt(document.querySelector('#harshInput').value) || 85;
+
+  const maxDb = 130;
+  const lowWidth = (low / maxDb) * 100;
+  const normalWidth = ((high - low) / maxDb) * 100;
+  const highWidth = ((harsh - high) / maxDb) * 100;
+  const harshWidth = ((maxDb - harsh) / maxDb) * 100;
+
+  document.querySelector('#previewLow').style.width = lowWidth + '%';
+  document.querySelector('#previewNormal').style.width = normalWidth + '%';
+  document.querySelector('#previewHigh').style.width = highWidth + '%';
+  document.querySelector('#previewHarsh').style.width = harshWidth + '%';
+
+  document.querySelector('#previewLowValue').textContent = `0-${low}dB`;
+  document.querySelector('#previewNormalValue').textContent = `${low}-${high}dB`;
+  document.querySelector('#previewHighValue').textContent = `${high}-${harsh}dB`;
+  document.querySelector('#previewHarshValue').textContent = `${harsh}dB+`;
 }
 
 function render() {
@@ -184,12 +412,18 @@ function render() {
     ['观测数', records.length],
     ['平均分贝', `${average(records.map((record) => record.db)).toFixed(1)}dB`],
     ['最高分贝', `${Math.max(...records.map((record) => record.db), 0)}dB`],
-    ['高噪声占比', `${Math.round(records.filter((record) => record.db >= 75).length / Math.max(records.length, 1) * 100)}%`]
+    ['高噪声占比', `${Math.round(records.filter((record) => isHighNoise(record.db)).length / Math.max(records.length, 1) * 100)}%`]
   ].map(([label, value]) => `<article><span>${label}</span><strong>${value}</strong></article>`).join('');
   drawLine('#daily', dayRecords.map((record) => ({ label: record.at.slice(11, 16), value: record.db })), 'dB');
   drawBars('#locations', grouped(filtered), 'dB');
-  document.querySelector('#hotList').innerHTML = filtered.filter((record) => record.db >= 70).sort((a, b) => b.db - a.db).slice(0, 6).map((record) => `<div class="hot"><strong>${record.db}dB</strong><span>${record.location}</span><em>${record.source}</em></div>`).join('') || '<p class="empty">暂无高噪声记录</p>';
-  document.querySelector('#rows').innerHTML = filtered.sort((a, b) => b.at.localeCompare(a.at)).map((record) => `<tr><td>${record.at.replace('T', ' ')}</td><td><span class="location-link" data-location="${record.location}">${record.location}</span></td><td>${record.db}dB</td><td>${record.source}</td><td>${record.feeling}</td><td><button data-edit="${record.id}">编辑</button><button data-del="${record.id}">删除</button></td></tr>`).join('');
+  document.querySelector('#hotList').innerHTML = filtered.filter((record) => isHighNoise(record.db)).sort((a, b) => b.db - a.db).slice(0, 6).map((record) => {
+    const level = getNoiseLevel(record.db);
+    return `<div class="hot noise-level-${level}"><strong>${record.db}dB</strong><span>${record.location}</span><em>${record.source}</em></div>`;
+  }).join('') || '<p class="empty">暂无高噪声记录</p>';
+  document.querySelector('#rows').innerHTML = filtered.sort((a, b) => b.at.localeCompare(a.at)).map((record) => {
+    const level = getNoiseLevel(record.db);
+    return `<tr class="noise-row noise-level-${level}"><td>${record.at.replace('T', ' ')}</td><td><span class="location-link" data-location="${record.location}">${record.location}</span></td><td><span class="db-badge noise-level-${level}">${record.db}dB</span></td><td>${record.source}</td><td>${record.feeling}</td><td><button data-edit="${record.id}">编辑</button><button data-del="${record.id}">删除</button></td></tr>`;
+  }).join('');
   document.querySelectorAll('.location-link').forEach((link) => {
     link.addEventListener('click', () => openLocationDetail(link.dataset.location));
   });
@@ -217,21 +451,65 @@ function average(values) {
   return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
 }
 
+function getY(value, min, span) {
+  return 178 - ((value - min) / span) * 132;
+}
+
 function drawLine(selector, data, unit) {
   const el = document.querySelector(selector);
   if (!data.length) return (el.innerHTML = '<p class="empty">暂无数据</p>');
-  const max = Math.max(...data.map((item) => item.value), 1);
-  const min = Math.min(...data.map((item) => item.value), 0);
+  const max = Math.max(...data.map((item) => item.value), thresholds.harsh + 10);
+  const min = Math.min(...data.map((item) => item.value), thresholds.lowReference - 10);
   const span = Math.max(max - min, 1);
-  const points = data.map((item, index) => `${42 + index * (420 / Math.max(data.length - 1, 1))},${178 - ((item.value - min) / span) * 132}`).join(' ');
-  el.innerHTML = `<svg viewBox="0 0 500 220"><polyline points="${points}" fill="none" stroke="#d94636" stroke-width="4" stroke-linecap="round"/>${data.map((item, index) => `<circle cx="${42 + index * (420 / Math.max(data.length - 1, 1))}" cy="${178 - ((item.value - min) / span) * 132}" r="5"/><text x="${42 + index * (420 / Math.max(data.length - 1, 1))}" y="205">${item.label}</text><text x="${42 + index * (420 / Math.max(data.length - 1, 1))}" y="${166 - ((item.value - min) / span) * 132}">${item.value}${unit}</text>`).join('')}</svg>`;
+
+  const lineSegments = data.map((item, index) => {
+    if (index === 0) return '';
+    const prevItem = data[index - 1];
+    const x1 = 42 + (index - 1) * (420 / Math.max(data.length - 1, 1));
+    const y1 = getY(prevItem.value, min, span);
+    const x2 = 42 + index * (420 / Math.max(data.length - 1, 1));
+    const y2 = getY(item.value, min, span);
+    const color = getNoiseColor((prevItem.value + item.value) / 2);
+    return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${color}" stroke-width="4" stroke-linecap="round"/>`;
+  }).join('');
+
+  const referenceLines = [];
+  const refYHigh = getY(thresholds.highNoise, min, span);
+  if (refYHigh >= 46 && refYHigh <= 178) {
+    referenceLines.push(`<line x1="42" y1="${refYHigh}" x2="462" y2="${refYHigh}" stroke="#f97316" stroke-width="1" stroke-dasharray="4,4"/><text x="462" y="${refYHigh - 4}" text-anchor="end" fill="#f97316" font-size="11">高噪声 ${thresholds.highNoise}dB</text>`);
+  }
+  const refYHarsh = getY(thresholds.harsh, min, span);
+  if (refYHarsh >= 46 && refYHarsh <= 178) {
+    referenceLines.push(`<line x1="42" y1="${refYHarsh}" x2="462" y2="${refYHarsh}" stroke="#d94636" stroke-width="1" stroke-dasharray="4,4"/><text x="462" y="${refYHarsh - 4}" text-anchor="end" fill="#d94636" font-size="11">刺耳 ${thresholds.harsh}dB</text>`);
+  }
+  const refYLow = getY(thresholds.lowReference, min, span);
+  if (refYLow >= 46 && refYLow <= 178) {
+    referenceLines.push(`<line x1="42" y1="${refYLow}" x2="462" y2="${refYLow}" stroke="#22c55e" stroke-width="1" stroke-dasharray="4,4"/><text x="462" y="${refYLow - 4}" text-anchor="end" fill="#22c55e" font-size="11">低参考 ${thresholds.lowReference}dB</text>`);
+  }
+
+  el.innerHTML = `<svg viewBox="0 0 500 220">
+    ${referenceLines.join('')}
+    ${lineSegments}
+    ${data.map((item, index) => {
+      const x = 42 + index * (420 / Math.max(data.length - 1, 1));
+      const y = getY(item.value, min, span);
+      const color = getNoiseColor(item.value);
+      return `<circle cx="${x}" cy="${y}" r="5" fill="${color}" stroke="white" stroke-width="2"/>
+              <text x="${x}" y="205">${item.label}</text>
+              <text x="${x}" y="${y - 10}" fill="${color}" font-weight="bold">${item.value}${unit}</text>`;
+    }).join('')}
+  </svg>`;
 }
 
 function drawBars(selector, data, unit) {
   const el = document.querySelector(selector);
   if (!data.length) return (el.innerHTML = '<p class="empty">暂无数据</p>');
   const max = Math.max(...data.map((item) => item.value), 1);
-  el.innerHTML = `<svg viewBox="0 0 500 220">${data.map((item, index) => `<g class="location-bar" data-location="${item.label}" style="cursor: pointer;"><text x="18" y="${44 + index * 42}" fill="#d94636" text-decoration="underline">${item.label}</text><rect x="150" y="${24 + index * 42}" width="${(item.value / max) * 300}" height="22" rx="4"/><text x="${160 + (item.value / max) * 300}" y="${42 + index * 42}">${Math.round(item.value)}${unit}</text></g>`).join('')}</svg>`;
+  el.innerHTML = `<svg viewBox="0 0 500 220">${data.map((item, index) => {
+    const color = getNoiseColor(item.value);
+    const textColor = isHighNoise(item.value) ? color : '#251e1a';
+    return `<g class="location-bar" data-location="${item.label}" style="cursor: pointer;"><text x="18" y="${44 + index * 42}" fill="${textColor}" text-decoration="underline">${item.label}</text><rect x="150" y="${24 + index * 42}" width="${(item.value / max) * 300}" height="22" rx="4" fill="${color}"/><text x="${160 + (item.value / max) * 300}" y="${42 + index * 42}" fill="${color}" font-weight="bold">${Math.round(item.value)}${unit}</text></g>`;
+  }).join('')}</svg>`;
   el.querySelectorAll('.location-bar').forEach((g) => {
     g.addEventListener('click', () => openLocationDetail(g.dataset.location));
   });
@@ -327,8 +605,12 @@ document.querySelector('#locationDetailOverlay').addEventListener('click', (e) =
   }
 });
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && !document.querySelector('#locationDetailOverlay').classList.contains('hidden')) {
-    closeLocationDetail();
+  if (e.key === 'Escape') {
+    if (!document.querySelector('#thresholdOverlay').classList.contains('hidden')) {
+      closeThresholdPanel();
+    } else if (!document.querySelector('#locationDetailOverlay').classList.contains('hidden')) {
+      closeLocationDetail();
+    }
   }
 });
 
@@ -421,7 +703,7 @@ function calculateReportStats(filtered) {
   const dbs = filtered.map(r => r.db);
   const avgDb = average(dbs);
   const maxDb = Math.max(...dbs);
-  const highNoiseCount = filtered.filter(r => r.db >= 75).length;
+  const highNoiseCount = filtered.filter(r => isHighNoise(r.db)).length;
   const highNoiseRatio = (highNoiseCount / filtered.length * 100).toFixed(1);
 
   const locationStats = {};
@@ -432,7 +714,7 @@ function calculateReportStats(filtered) {
     locationStats[r.location].count++;
     locationStats[r.location].totalDb += r.db;
     locationStats[r.location].maxDb = Math.max(locationStats[r.location].maxDb, r.db);
-    if (r.db >= 75) locationStats[r.location].highNoiseCount++;
+    if (isHighNoise(r.db)) locationStats[r.location].highNoiseCount++;
   });
 
   const locationRanking = Object.entries(locationStats)
@@ -446,7 +728,7 @@ function calculateReportStats(filtered) {
     .sort((a, b) => parseFloat(b.avgDb) - parseFloat(a.avgDb));
 
   const highNoiseRecords = filtered
-    .filter(r => r.db >= 75)
+    .filter(r => isHighNoise(r.db))
     .sort((a, b) => b.db - a.db);
 
   return {
@@ -458,7 +740,8 @@ function calculateReportStats(filtered) {
     locationRanking,
     highNoiseRecords,
     startDate: reportStartDate.value,
-    endDate: reportEndDate.value
+    endDate: reportEndDate.value,
+    thresholds: { ...thresholds }
   };
 }
 
@@ -505,7 +788,7 @@ function renderReport(startDate, endDate) {
       <div class="report-section">
         <h3>一、概要说明</h3>
         <p>本次报告统计了 <strong>${stats.startDate}</strong> 至 <strong>${stats.endDate}</strong> 期间的噪声观测数据，共包含 <strong>${stats.count}</strong> 条有效记录。</p>
-        <p>期间平均噪声为 <strong>${stats.avgDb}dB</strong>，最高噪声达到 <strong>${stats.maxDb}dB</strong>，高噪声（≥75dB）记录共 <strong>${stats.highNoiseCount}</strong> 条，占比 <strong>${stats.highNoiseRatio}%</strong>。</p>
+        <p>期间平均噪声为 <strong>${stats.avgDb}dB</strong>，最高噪声达到 <strong>${stats.maxDb}dB</strong>，高噪声（≥${stats.thresholds.highNoise}dB）记录共 <strong>${stats.highNoiseCount}</strong> 条，占比 <strong>${stats.highNoiseRatio}%</strong>。</p>
       </div>
 
       <div class="report-section">
@@ -541,7 +824,7 @@ function renderReport(startDate, endDate) {
 
       <div class="report-section">
         <h3>三、高噪声明细</h3>
-        <p>噪声≥75dB的记录明细（共${stats.highNoiseRecords.length}条）：</p>
+        <p>噪声≥${stats.thresholds.highNoise}dB的记录明细（共${stats.highNoiseRecords.length}条）：</p>
         ${stats.highNoiseRecords.length ? `
           <div class="tableWrap">
             <table class="report-table">
