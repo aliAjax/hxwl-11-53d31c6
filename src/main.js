@@ -2,12 +2,31 @@ import './styles.css';
 
 const key = 'hxwl-11-noise-records';
 const thresholdKey = 'hxwl-11-noise-thresholds';
+const monitoringPointsKey = 'hxwl-11-monitoring-points';
+
 const seed = [
-  { id: crypto.randomUUID(), location: '老城菜市口', at: '2026-06-05T07:40', db: 76, source: '叫卖与卸货', feeling: '嘈杂' },
-  { id: crypto.randomUUID(), location: '滨河步道', at: '2026-06-05T12:30', db: 58, source: '人流', feeling: '可接受' },
-  { id: crypto.randomUUID(), location: '高架桥下', at: '2026-06-05T18:20', db: 84, source: '车流', feeling: '刺耳' },
-  { id: crypto.randomUUID(), location: '社区广场', at: '2026-06-06T20:10', db: 71, source: '音箱', feeling: '偏吵' },
-  { id: crypto.randomUUID(), location: '图书馆外', at: '2026-06-06T15:00', db: 49, source: '环境声', feeling: '安静' }
+  { id: crypto.randomUUID(), location: '老城菜市口', at: '2026-06-05T07:40', db: 76, source: '叫卖与卸货', feeling: '嘈杂', monitoringPointId: null },
+  { id: crypto.randomUUID(), location: '滨河步道', at: '2026-06-05T12:30', db: 58, source: '人流', feeling: '可接受', monitoringPointId: null },
+  { id: crypto.randomUUID(), location: '高架桥下', at: '2026-06-05T18:20', db: 84, source: '车流', feeling: '刺耳', monitoringPointId: null },
+  { id: crypto.randomUUID(), location: '社区广场', at: '2026-06-06T20:10', db: 71, source: '音箱', feeling: '偏吵', monitoringPointId: null },
+  { id: crypto.randomUUID(), location: '图书馆外', at: '2026-06-06T15:00', db: 49, source: '环境声', feeling: '安静', monitoringPointId: null }
+];
+
+const defaultMonitoringPoints = [
+  { id: crypto.randomUUID(), name: '老城菜市口', district: '老城区', latitude: 30.6598, longitude: 104.0633, type: 'commercial', notes: '传统菜市场，早市高峰时段噪声较大' },
+  { id: crypto.randomUUID(), name: '滨河步道', district: '河滨区', latitude: 30.6586, longitude: 104.0657, type: 'park', notes: '沿河休闲步道，主要为人流活动噪声' },
+  { id: crypto.randomUUID(), name: '高架桥下', district: '交通区', latitude: 30.6612, longitude: 104.0601, type: 'traffic', notes: '城市主干道高架桥下方，车流噪声严重' },
+  { id: crypto.randomUUID(), name: '社区广场', district: '居民区', latitude: 30.6575, longitude: 104.0620, type: 'residential', notes: '居民小区中心广场，晚间广场舞活动频繁' },
+  { id: crypto.randomUUID(), name: '图书馆外', district: '文化区', latitude: 30.6569, longitude: 104.0645, type: 'school', notes: '市图书馆外围，需要保持安静的区域' }
+];
+
+const pointTypes = [
+  { value: 'traffic', label: '交通主干道', colorClass: 'point-type-traffic' },
+  { value: 'residential', label: '居民区', colorClass: 'point-type-residential' },
+  { value: 'commercial', label: '商业区', colorClass: 'point-type-commercial' },
+  { value: 'park', label: '公园/绿地', colorClass: 'point-type-park' },
+  { value: 'school', label: '学校/医院', colorClass: 'point-type-school' },
+  { value: 'other', label: '其他', colorClass: 'point-type-other' }
 ];
 
 const defaultThresholds = {
@@ -17,8 +36,37 @@ const defaultThresholds = {
 };
 
 let records = JSON.parse(localStorage.getItem(key) || 'null') || seed;
+let monitoringPoints = JSON.parse(localStorage.getItem(monitoringPointsKey) || 'null') || defaultMonitoringPoints;
 let thresholds = JSON.parse(localStorage.getItem(thresholdKey) || 'null') || { ...defaultThresholds };
 let editingId = null;
+let editingPointId = null;
+let useManualLocation = false;
+let selectedMonitoringPointFilter = '';
+
+function migrateData() {
+  records = records.map(record => {
+    if (record.monitoringPointId === undefined) {
+      return { ...record, monitoringPointId: null };
+    }
+    return record;
+  });
+
+  const locationToPointMap = new Map();
+  monitoringPoints.forEach(point => {
+    locationToPointMap.set(point.name, point.id);
+  });
+
+  records = records.map(record => {
+    if (!record.monitoringPointId && locationToPointMap.has(record.location)) {
+      return { ...record, monitoringPointId: locationToPointMap.get(record.location) };
+    }
+    return record;
+  });
+
+  save();
+}
+
+migrateData();
 
 document.querySelector('#app').innerHTML = `
   <main class="shell">
@@ -28,6 +76,7 @@ document.querySelector('#app').innerHTML = `
         <h1>城市噪声切片</h1>
       </div>
       <div class="topButtons">
+        <button id="monitoringPointsBtn">监测点管理</button>
         <button id="thresholdBtn">阈值设置</button>
         <button id="reportBtn">生成报告</button>
         <button id="reset">载入示例</button>
@@ -39,7 +88,18 @@ document.querySelector('#app').innerHTML = `
     <section class="workspace">
       <form id="form" class="panel">
         <h2>新增观测</h2>
-        <input name="location" placeholder="街区或地点" required />
+        <div id="locationInputContainer">
+          <div class="location-input-group" id="monitoringPointSelectGroup">
+            <select name="monitoringPointId" id="monitoringPointSelect">
+              <option value="">选择监测点</option>
+            </select>
+            <button type="button" class="location-toggle-btn" id="toggleManualLocation">手动输入</button>
+          </div>
+          <div class="location-input-group hidden" id="manualLocationGroup">
+            <input name="location" placeholder="街区或地点" />
+            <button type="button" class="location-toggle-btn" id="toggleSelectLocation">选择监测点</button>
+          </div>
+        </div>
         <input name="at" type="datetime-local" required />
         <input name="db" type="number" min="20" max="130" placeholder="分贝dB" required />
         <input name="source" placeholder="噪声来源" required />
@@ -53,7 +113,12 @@ document.querySelector('#app').innerHTML = `
       <section class="panel wide">
         <div class="panelHead">
           <h2>日内分贝曲线</h2>
-          <input id="dayFilter" type="date" />
+          <div class="filter-section">
+            <select id="monitoringPointFilter">
+              <option value="">全部监测点</option>
+            </select>
+            <input id="dayFilter" type="date" />
+          </div>
         </div>
         <div class="chart" id="daily"></div>
       </section>
@@ -100,7 +165,7 @@ document.querySelector('#app').innerHTML = `
 
     <section class="panel">
       <div class="panelHead"><h2>记录列表</h2><input id="search" placeholder="搜索地点或来源" /></div>
-      <div class="tableWrap"><table><thead><tr><th>时间</th><th>地点</th><th>分贝</th><th>来源</th><th>感受</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>
+      <div class="tableWrap"><table><thead><tr><th>时间</th><th>监测点</th><th>地点</th><th>分贝</th><th>来源</th><th>感受</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>
     </section>
 
     <section class="panel report-panel hidden" id="reportPanel">
@@ -240,28 +305,163 @@ document.querySelector('#app').innerHTML = `
         </div>
       </div>
     </div>
+
+    <div class="monitoring-point-overlay hidden" id="monitoringPointOverlay">
+      <div class="monitoring-point-panel">
+        <div class="monitoring-point-header">
+          <h2 id="monitoringPointTitle">固定监测点管理</h2>
+          <button class="monitoring-point-close" id="monitoringPointClose">&times;</button>
+        </div>
+        <div class="monitoring-point-content">
+          <form id="monitoringPointForm" class="monitoring-point-form">
+            <div>
+              <label>名称 <span style="color:#d94636">*</span></label>
+              <input name="name" placeholder="监测点名称" required />
+            </div>
+            <div>
+              <label>街区 <span style="color:#d94636">*</span></label>
+              <input name="district" placeholder="所属街区" required />
+            </div>
+            <div>
+              <label>纬度 <span style="color:#d94636">*</span></label>
+              <input name="latitude" type="number" step="0.0001" placeholder="-90 到 90" min="-90" max="90" required />
+            </div>
+            <div>
+              <label>经度 <span style="color:#d94636">*</span></label>
+              <input name="longitude" type="number" step="0.0001" placeholder="-180 到 180" min="-180" max="180" required />
+            </div>
+            <div>
+              <label>点位类型 <span style="color:#d94636">*</span></label>
+              <select name="type" required>
+                <option value="">请选择类型</option>
+                <option value="traffic">交通主干道</option>
+                <option value="residential">居民区</option>
+                <option value="commercial">商业区</option>
+                <option value="park">公园/绿地</option>
+                <option value="school">学校/医院</option>
+                <option value="other">其他</option>
+              </select>
+            </div>
+            <div>
+              <label>备注</label>
+              <input name="notes" placeholder="补充说明信息" />
+            </div>
+            <div class="form-actions">
+              <button type="button" class="secondary" id="cancelPointEdit">取消</button>
+              <button type="submit" class="primary">保存监测点</button>
+            </div>
+          </form>
+
+          <div class="monitoring-point-list">
+            <h3>已有的监测点</h3>
+            <div id="monitoringPointsList"></div>
+          </div>
+        </div>
+      </div>
+    </div>
   </main>
 `;
 
 const form = document.querySelector('#form');
 const search = document.querySelector('#search');
 const dayFilter = document.querySelector('#dayFilter');
+const monitoringPointFilter = document.querySelector('#monitoringPointFilter');
+const monitoringPointSelect = document.querySelector('#monitoringPointSelect');
+const monitoringPointForm = document.querySelector('#monitoringPointForm');
 
 form.addEventListener('submit', (event) => {
   event.preventDefault();
   const data = Object.fromEntries(new FormData(form).entries());
-  const item = { ...data, db: Number(data.db), id: editingId || crypto.randomUUID() };
+
+  let location = data.location;
+  let monitoringPointId = data.monitoringPointId || null;
+
+  if (monitoringPointId) {
+    const point = monitoringPoints.find(p => p.id === monitoringPointId);
+    if (point) {
+      location = point.name;
+    }
+  }
+
+  if (!location) {
+    alert('请选择监测点或输入地点');
+    return;
+  }
+
+  const item = {
+    ...data,
+    location,
+    monitoringPointId,
+    db: Number(data.db),
+    id: editingId || crypto.randomUUID()
+  };
+
   records = editingId ? records.map((record) => (record.id === editingId ? item : record)) : [item, ...records];
   editingId = null;
   form.reset();
+  useManualLocation = false;
+  updateLocationInput();
   save();
   render();
 });
 search.addEventListener('input', render);
 dayFilter.addEventListener('change', render);
+monitoringPointFilter.addEventListener('change', (e) => {
+  selectedMonitoringPointFilter = e.target.value;
+  render();
+});
+
+document.querySelector('#toggleManualLocation').addEventListener('click', () => {
+  useManualLocation = true;
+  updateLocationInput();
+});
+
+document.querySelector('#toggleSelectLocation').addEventListener('click', () => {
+  useManualLocation = false;
+  updateLocationInput();
+});
+
+document.querySelector('#monitoringPointsBtn').addEventListener('click', openMonitoringPointPanel);
+document.querySelector('#monitoringPointClose').addEventListener('click', closeMonitoringPointPanel);
+document.querySelector('#monitoringPointOverlay').addEventListener('click', (e) => {
+  if (e.target.id === 'monitoringPointOverlay') closeMonitoringPointPanel();
+});
+
+document.querySelector('#cancelPointEdit').addEventListener('click', () => {
+  editingPointId = null;
+  monitoringPointForm.reset();
+});
+
+monitoringPointForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  const data = Object.fromEntries(new FormData(monitoringPointForm).entries());
+  const point = {
+    ...data,
+    latitude: Number(data.latitude),
+    longitude: Number(data.longitude),
+    id: editingPointId || crypto.randomUUID()
+  };
+
+  if (editingPointId) {
+    monitoringPoints = monitoringPoints.map(p => p.id === editingPointId ? point : p);
+  } else {
+    monitoringPoints = [point, ...monitoringPoints];
+  }
+
+  editingPointId = null;
+  monitoringPointForm.reset();
+  saveMonitoringPoints();
+  renderMonitoringPointsList();
+  updateMonitoringPointSelects();
+  render();
+});
+
 document.querySelector('#reset').addEventListener('click', () => {
   records = seed;
+  monitoringPoints = defaultMonitoringPoints;
   save();
+  saveMonitoringPoints();
+  updateMonitoringPointSelects();
   render();
 });
 
@@ -343,6 +543,146 @@ function saveThresholds() {
   localStorage.setItem(thresholdKey, JSON.stringify(thresholds));
 }
 
+function saveMonitoringPoints() {
+  localStorage.setItem(monitoringPointsKey, JSON.stringify(monitoringPoints));
+}
+
+function getMonitoringPointById(id) {
+  return monitoringPoints.find(p => p.id === id) || null;
+}
+
+function getPointTypeInfo(typeValue) {
+  return pointTypes.find(t => t.value === typeValue) || pointTypes[pointTypes.length - 1];
+}
+
+function updateLocationInput() {
+  const selectGroup = document.querySelector('#monitoringPointSelectGroup');
+  const manualGroup = document.querySelector('#manualLocationGroup');
+  const locationInput = form.elements['location'];
+  const pointSelect = form.elements['monitoringPointId'];
+
+  if (useManualLocation) {
+    selectGroup.classList.add('hidden');
+    manualGroup.classList.remove('hidden');
+    locationInput.required = true;
+    pointSelect.required = false;
+  } else {
+    selectGroup.classList.remove('hidden');
+    manualGroup.classList.add('hidden');
+    locationInput.required = false;
+    pointSelect.required = true;
+  }
+}
+
+function updateMonitoringPointSelects() {
+  const options = monitoringPoints
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map(p => `<option value="${p.id}">${p.name} (${p.district})</option>`)
+    .join('');
+
+  monitoringPointSelect.innerHTML = `<option value="">选择监测点</option>${options}`;
+  monitoringPointFilter.innerHTML = `<option value="">全部监测点</option>${options}`;
+}
+
+function openMonitoringPointPanel() {
+  document.querySelector('#monitoringPointOverlay').classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+  editingPointId = null;
+  monitoringPointForm.reset();
+  renderMonitoringPointsList();
+}
+
+function closeMonitoringPointPanel() {
+  document.querySelector('#monitoringPointOverlay').classList.add('hidden');
+  document.body.style.overflow = '';
+  editingPointId = null;
+  monitoringPointForm.reset();
+}
+
+function renderMonitoringPointsList() {
+  const listEl = document.querySelector('#monitoringPointsList');
+
+  if (!monitoringPoints.length) {
+    listEl.innerHTML = '<p class="empty">暂无监测点，请先添加</p>';
+    return;
+  }
+
+  listEl.innerHTML = monitoringPoints
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map(point => {
+      const typeInfo = getPointTypeInfo(point.type);
+      const recordCount = records.filter(r => r.monitoringPointId === point.id).length;
+      const pointRecords = records.filter(r => r.monitoringPointId === point.id);
+      const avgDb = pointRecords.length ? average(pointRecords.map(r => r.db)).toFixed(1) : '--';
+
+      return `
+        <div class="monitoring-point-item">
+          <div class="monitoring-point-info">
+            <h4>${point.name}</h4>
+            <div class="point-meta">
+              <span>📍 ${point.district}</span>
+              <span class="point-type-badge ${typeInfo.colorClass}">${typeInfo.label}</span>
+              <span>📊 ${recordCount} 条记录</span>
+              ${pointRecords.length ? `<span>🔊 平均 ${avgDb}dB</span>` : ''}
+            </div>
+            <div class="point-coords">
+              🗺️ 坐标：${point.latitude.toFixed(4)}, ${point.longitude.toFixed(4)}
+            </div>
+            ${point.notes ? `<div class="point-notes">📝 ${point.notes}</div>` : ''}
+          </div>
+          <div class="monitoring-point-actions">
+            <button class="secondary" data-edit-point="${point.id}">编辑</button>
+            <button class="secondary" data-del-point="${point.id}">删除</button>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+  listEl.querySelectorAll('[data-edit-point]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const pointId = btn.dataset.editPoint;
+      const point = getMonitoringPointById(pointId);
+      if (point) {
+        editingPointId = pointId;
+        Object.entries(point).forEach(([name, value]) => {
+          if (monitoringPointForm.elements[name]) {
+            monitoringPointForm.elements[name].value = value;
+          }
+        });
+        monitoringPointForm.scrollIntoView({ behavior: 'smooth' });
+      }
+    });
+  });
+
+  listEl.querySelectorAll('[data-del-point]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const pointId = btn.dataset.delPoint;
+      const point = getMonitoringPointById(pointId);
+      const relatedRecords = records.filter(r => r.monitoringPointId === pointId);
+
+      let confirmMsg = `确定要删除监测点"${point.name}"吗？`;
+      if (relatedRecords.length > 0) {
+        confirmMsg += `\n\n该监测点关联了 ${relatedRecords.length} 条观测记录，删除后这些记录将保留但不再关联任何监测点。`;
+      }
+
+      if (confirm(confirmMsg)) {
+        records = records.map(r => {
+          if (r.monitoringPointId === pointId) {
+            return { ...r, monitoringPointId: null };
+          }
+          return r;
+        });
+        monitoringPoints = monitoringPoints.filter(p => p.id !== pointId);
+        save();
+        saveMonitoringPoints();
+        renderMonitoringPointsList();
+        updateMonitoringPointSelects();
+        render();
+      }
+    });
+  });
+}
+
 function getNoiseLevel(db) {
   if (db >= thresholds.harsh) return 'harsh';
   if (db >= thresholds.highNoise) return 'high';
@@ -406,24 +746,41 @@ function updateThresholdPreview() {
 
 function render() {
   if (!dayFilter.value && records[0]) dayFilter.value = records[0].at.slice(0, 10);
-  const filtered = records.filter((record) => [record.location, record.source, record.feeling].join(' ').includes(search.value.trim()));
+  updateMonitoringPointSelects();
+  updateLocationInput();
+
+  let filtered = records.filter((record) => [record.location, record.source, record.feeling].join(' ').includes(search.value.trim()));
+
+  if (selectedMonitoringPointFilter) {
+    filtered = filtered.filter(record => record.monitoringPointId === selectedMonitoringPointFilter);
+  }
+
   const dayRecords = filtered.filter((record) => record.at.startsWith(dayFilter.value)).sort((a, b) => a.at.localeCompare(b.at));
+
+  const summaryRecords = selectedMonitoringPointFilter ? filtered : records;
   document.querySelector('#summary').innerHTML = [
-    ['观测数', records.length],
-    ['平均分贝', `${average(records.map((record) => record.db)).toFixed(1)}dB`],
-    ['最高分贝', `${Math.max(...records.map((record) => record.db), 0)}dB`],
-    ['高噪声占比', `${Math.round(records.filter((record) => isHighNoise(record.db)).length / Math.max(records.length, 1) * 100)}%`]
+    ['观测数', summaryRecords.length],
+    ['平均分贝', `${average(summaryRecords.map((record) => record.db)).toFixed(1)}dB`],
+    ['最高分贝', `${Math.max(...summaryRecords.map((record) => record.db), 0)}dB`],
+    ['高噪声占比', `${Math.round(summaryRecords.filter((record) => isHighNoise(record.db)).length / Math.max(summaryRecords.length, 1) * 100)}%`]
   ].map(([label, value]) => `<article><span>${label}</span><strong>${value}</strong></article>`).join('');
+
   drawLine('#daily', dayRecords.map((record) => ({ label: record.at.slice(11, 16), value: record.db })), 'dB');
   drawBars('#locations', grouped(filtered), 'dB');
+
   document.querySelector('#hotList').innerHTML = filtered.filter((record) => isHighNoise(record.db)).sort((a, b) => b.db - a.db).slice(0, 6).map((record) => {
     const level = getNoiseLevel(record.db);
-    return `<div class="hot noise-level-${level}"><strong>${record.db}dB</strong><span>${record.location}</span><em>${record.source}</em></div>`;
+    const point = record.monitoringPointId ? getMonitoringPointById(record.monitoringPointId) : null;
+    return `<div class="hot noise-level-${level}"><strong>${record.db}dB</strong><span>${record.location}${point ? ` <span class="point-type-badge ${getPointTypeInfo(point.type).colorClass}" style="font-size:10px;padding:2px 6px;">${getPointTypeInfo(point.type).label}</span>` : ''}</span><em>${record.source}</em></div>`;
   }).join('') || '<p class="empty">暂无高噪声记录</p>';
+
   document.querySelector('#rows').innerHTML = filtered.sort((a, b) => b.at.localeCompare(a.at)).map((record) => {
     const level = getNoiseLevel(record.db);
-    return `<tr class="noise-row noise-level-${level}"><td>${record.at.replace('T', ' ')}</td><td><span class="location-link" data-location="${record.location}">${record.location}</span></td><td><span class="db-badge noise-level-${level}">${record.db}dB</span></td><td>${record.source}</td><td>${record.feeling}</td><td><button data-edit="${record.id}">编辑</button><button data-del="${record.id}">删除</button></td></tr>`;
+    const point = record.monitoringPointId ? getMonitoringPointById(record.monitoringPointId) : null;
+    const pointDisplay = point ? `<span class="point-type-badge ${getPointTypeInfo(point.type).colorClass}">${point.name}</span>` : '<span style="color:#999;">未关联</span>';
+    return `<tr class="noise-row noise-level-${level}"><td>${record.at.replace('T', ' ')}</td><td>${pointDisplay}</td><td><span class="location-link" data-location="${record.location}">${record.location}</span></td><td><span class="db-badge noise-level-${level}">${record.db}dB</span></td><td>${record.source}</td><td>${record.feeling}</td><td><button data-edit="${record.id}">编辑</button><button data-del="${record.id}">删除</button></td></tr>`;
   }).join('');
+
   document.querySelectorAll('.location-link').forEach((link) => {
     link.addEventListener('click', () => openLocationDetail(link.dataset.location));
   });
@@ -435,16 +792,48 @@ function render() {
   document.querySelectorAll('[data-edit]').forEach((button) => button.addEventListener('click', () => {
     const record = records.find((item) => item.id === button.dataset.edit);
     editingId = record.id;
+
+    if (record.monitoringPointId) {
+      useManualLocation = false;
+      updateLocationInput();
+      form.elements['monitoringPointId'].value = record.monitoringPointId;
+      form.elements['location'].value = '';
+    } else {
+      useManualLocation = true;
+      updateLocationInput();
+      form.elements['location'].value = record.location;
+      form.elements['monitoringPointId'].value = '';
+    }
+
     Object.entries(record).forEach(([name, value]) => {
-      if (form.elements[name]) form.elements[name].value = value;
+      if (form.elements[name] && name !== 'location' && name !== 'monitoringPointId') {
+        form.elements[name].value = value;
+      }
     });
   }));
 }
 
 function grouped(data) {
   const map = new Map();
-  data.forEach((record) => map.set(record.location, [...(map.get(record.location) || []), record.db]));
-  return [...map.entries()].map(([label, values]) => ({ label, value: average(values) })).sort((a, b) => b.value - a.value);
+  const pointMap = new Map();
+
+  data.forEach((record) => {
+    const key = record.monitoringPointId || `manual:${record.location}`;
+    if (!map.has(key)) {
+      map.set(key, []);
+      pointMap.set(key, {
+        label: record.location,
+        monitoringPointId: record.monitoringPointId,
+        point: record.monitoringPointId ? getMonitoringPointById(record.monitoringPointId) : null
+      });
+    }
+    map.get(key).push(record.db);
+  });
+
+  return [...map.entries()].map(([key, values]) => ({
+    ...pointMap.get(key),
+    value: average(values)
+  })).sort((a, b) => b.value - a.value);
 }
 
 function average(values) {
@@ -505,11 +894,34 @@ function drawBars(selector, data, unit) {
   const el = document.querySelector(selector);
   if (!data.length) return (el.innerHTML = '<p class="empty">暂无数据</p>');
   const max = Math.max(...data.map((item) => item.value), 1);
-  el.innerHTML = `<svg viewBox="0 0 500 220">${data.map((item, index) => {
+
+  const barHeight = 42;
+  const hasPoints = data.some(item => item.point);
+  const svgHeight = Math.max(220, data.length * barHeight + 40);
+
+  el.innerHTML = `<svg viewBox="0 0 500 ${svgHeight}" style="min-height: ${svgHeight}px;">${data.map((item, index) => {
     const color = getNoiseColor(item.value);
     const textColor = isHighNoise(item.value) ? color : '#251e1a';
-    return `<g class="location-bar" data-location="${item.label}" style="cursor: pointer;"><text x="18" y="${44 + index * 42}" fill="${textColor}" text-decoration="underline">${item.label}</text><rect x="150" y="${24 + index * 42}" width="${(item.value / max) * 300}" height="22" rx="4" fill="${color}"/><text x="${160 + (item.value / max) * 300}" y="${42 + index * 42}" fill="${color}" font-weight="bold">${Math.round(item.value)}${unit}</text></g>`;
+    const barWidth = (item.value / max) * 300;
+    const y = 24 + index * barHeight;
+    const labelY = 44 + index * barHeight;
+
+    let typeBadge = '';
+    if (item.point) {
+      const typeInfo = getPointTypeInfo(item.point.type);
+      typeBadge = `<rect x="18" y="${labelY - 16}" width="4" height="16" rx="2" fill="${color}"/>`;
+    }
+
+    return `
+      <g class="location-bar" data-location="${item.label}" style="cursor: pointer;">
+        ${typeBadge}
+        <text x="${item.point ? 28 : 18}" y="${labelY}" fill="${textColor}" text-decoration="underline" font-size="${hasPoints && item.point ? '12' : '13'}">${item.label}${item.point ? ` · ${getPointTypeInfo(item.point.type).label}` : ''}</text>
+        <rect x="150" y="${y}" width="${barWidth}" height="22" rx="4" fill="${color}"/>
+        <text x="${160 + barWidth}" y="${y + 18}" fill="${color}" font-weight="bold" font-size="12">${Math.round(item.value)}${unit}</text>
+      </g>
+    `;
   }).join('')}</svg>`;
+
   el.querySelectorAll('.location-bar').forEach((g) => {
     g.addEventListener('click', () => openLocationDetail(g.dataset.location));
   });
@@ -522,10 +934,37 @@ function openLocationDetail(location) {
 
   if (!locationRecords.length) return;
 
+  const firstRecord = locationRecords[0];
+  const point = firstRecord.monitoringPointId ? getMonitoringPointById(firstRecord.monitoringPointId) : null;
+
   const stats = calculateLocationStats(locationRecords);
   const mainSource = getMainSource(locationRecords.map((r) => r.source));
 
-  document.querySelector('#locationDetailTitle').textContent = `${location} · 噪声详情`;
+  let title = `${location} · 噪声详情`;
+  if (point) {
+    const typeInfo = getPointTypeInfo(point.type);
+    title = `${point.name} · ${typeInfo.label} · 噪声详情`;
+  }
+  document.querySelector('#locationDetailTitle').textContent = title;
+
+  let extraStats = '';
+  if (point) {
+    const typeInfo = getPointTypeInfo(point.type);
+    extraStats = `
+      <div class="stat-card">
+        <span class="stat-label">街区</span>
+        <strong class="stat-value">${point.district}</strong>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">类型</span>
+        <strong class="stat-value"><span class="point-type-badge ${typeInfo.colorClass}">${typeInfo.label}</span></strong>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">坐标</span>
+        <strong class="stat-value" style="font-size:14px;">${point.latitude.toFixed(4)}, ${point.longitude.toFixed(4)}</strong>
+      </div>
+    `;
+  }
 
   document.querySelector('#locationDetailStats').innerHTML = `
     <div class="stat-card">
@@ -544,6 +983,7 @@ function openLocationDetail(location) {
       <span class="stat-label">主要噪声来源</span>
       <strong class="stat-value">${mainSource}</strong>
     </div>
+    ${extraStats}
   `;
 
   const chartData = locationRecords.map((record) => ({
@@ -606,7 +1046,9 @@ document.querySelector('#locationDetailOverlay').addEventListener('click', (e) =
 });
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
-    if (!document.querySelector('#thresholdOverlay').classList.contains('hidden')) {
+    if (!document.querySelector('#monitoringPointOverlay').classList.contains('hidden')) {
+      closeMonitoringPointPanel();
+    } else if (!document.querySelector('#thresholdOverlay').classList.contains('hidden')) {
       closeThresholdPanel();
     } else if (!document.querySelector('#locationDetailOverlay').classList.contains('hidden')) {
       closeLocationDetail();
@@ -937,7 +1379,7 @@ function mapFields(rawRecord) {
 
 function validateRecord(record, mapping, lineNum) {
   const errors = [];
-  const result = { id: crypto.randomUUID() };
+  const result = { id: crypto.randomUUID(), monitoringPointId: null };
 
   const requiredFields = ['location', 'at', 'db', 'source', 'feeling'];
   requiredFields.forEach(field => {
@@ -954,6 +1396,11 @@ function validateRecord(record, mapping, lineNum) {
   });
 
   if (errors.length) return { valid: false, errors, lineNum };
+
+  const matchingPoint = monitoringPoints.find(p => p.name === result.location);
+  if (matchingPoint) {
+    result.monitoringPointId = matchingPoint.id;
+  }
 
   const dbNum = Number(result.db);
   if (isNaN(dbNum) || dbNum < 20 || dbNum > 130) {
