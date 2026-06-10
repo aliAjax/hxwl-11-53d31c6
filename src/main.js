@@ -5,6 +5,7 @@ const thresholdKey = 'hxwl-11-noise-thresholds';
 const monitoringPointsKey = 'hxwl-11-monitoring-points';
 const alarmsKey = 'hxwl-11-noise-alarms';
 const alarmConfigKey = 'hxwl-11-alarm-config';
+const filterViewsKey = 'hxwl-11-filter-views';
 
 const seed = [
   { id: crypto.randomUUID(), location: '老城菜市口', at: '2026-06-05T07:40', db: 76, source: '叫卖与卸货', feeling: '嘈杂', monitoringPointId: null },
@@ -56,6 +57,20 @@ let selectedMonitoringPointFilter = '';
 let alarmStatusFilter = 'all';
 let alarmTypeFilter = 'all';
 
+let currentFilters = {
+  dateStart: '',
+  dateEnd: '',
+  locations: [],
+  sources: [],
+  feelings: [],
+  dbMin: '',
+  dbMax: '',
+  highNoiseStatus: 'all'
+};
+
+let filterViews = JSON.parse(localStorage.getItem(filterViewsKey) || 'null') || [];
+let activeViewId = null;
+
 function migrateData() {
   records = records.map(record => {
     if (record.monitoringPointId === undefined) {
@@ -96,6 +111,74 @@ document.querySelector('#app').innerHTML = `
         <button id="reset">载入示例</button>
       </div>
     </header>
+
+    <section class="filter-panel" id="filterPanel">
+      <div class="filter-header">
+        <div class="filter-title">
+          <h2>多维筛选</h2>
+          <span class="filter-count" id="filterCount">0 个筛选条件</span>
+        </div>
+        <div class="filter-actions">
+          <div class="view-selector">
+            <select id="viewSelector">
+              <option value="">选择常用视图</option>
+            </select>
+            <button id="saveViewBtn" class="secondary">保存视图</button>
+            <button id="deleteViewBtn" class="secondary" disabled>删除视图</button>
+          </div>
+          <button id="resetFiltersBtn" class="secondary">重置筛选</button>
+          <button id="toggleFilterBtn" class="primary">展开筛选</button>
+        </div>
+      </div>
+      <div class="filter-body hidden" id="filterBody">
+        <div class="filter-grid">
+          <div class="filter-group">
+            <label>日期范围</label>
+            <div class="filter-date-range">
+              <input type="date" id="filterDateStart" />
+              <span class="filter-separator">至</span>
+              <input type="date" id="filterDateEnd" />
+            </div>
+          </div>
+          <div class="filter-group">
+            <label>地点</label>
+            <select id="filterLocation" multiple size="3"></select>
+          </div>
+          <div class="filter-group">
+            <label>噪声来源</label>
+            <select id="filterSource" multiple size="3"></select>
+          </div>
+          <div class="filter-group">
+            <label>主观感受</label>
+            <select id="filterFeeling" multiple size="3">
+              <option value="安静">安静</option>
+              <option value="可接受">可接受</option>
+              <option value="偏吵">偏吵</option>
+              <option value="嘈杂">嘈杂</option>
+              <option value="刺耳">刺耳</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <label>分贝区间</label>
+            <div class="filter-db-range">
+              <input type="number" id="filterDbMin" min="20" max="130" placeholder="最小值" />
+              <span class="filter-separator">-</span>
+              <input type="number" id="filterDbMax" min="20" max="130" placeholder="最大值" />
+              <span class="filter-unit">dB</span>
+            </div>
+          </div>
+          <div class="filter-group">
+            <label>高噪声状态</label>
+            <select id="filterHighNoise">
+              <option value="all">全部</option>
+              <option value="high">仅高噪声</option>
+              <option value="normal">仅正常噪声</option>
+            </select>
+          </div>
+        </div>
+        <div class="filter-active-tags" id="activeFilterTags"></div>
+      </div>
+    </section>
 
     <section class="summary" id="summary"></section>
 
@@ -512,6 +595,92 @@ monitoringPointFilter.addEventListener('change', (e) => {
   render();
 });
 
+document.querySelector('#toggleFilterBtn').addEventListener('click', () => {
+  const body = document.querySelector('#filterBody');
+  const btn = document.querySelector('#toggleFilterBtn');
+  body.classList.toggle('hidden');
+  btn.textContent = body.classList.contains('hidden') ? '展开筛选' : '收起筛选';
+});
+
+document.querySelector('#resetFiltersBtn').addEventListener('click', resetFilters);
+document.querySelector('#saveViewBtn').addEventListener('click', saveCurrentView);
+document.querySelector('#deleteViewBtn').addEventListener('click', deleteActiveView);
+
+document.querySelector('#viewSelector').addEventListener('change', (e) => {
+  if (e.target.value) {
+    loadView(e.target.value);
+  } else {
+    activeViewId = null;
+    updateFilterUI();
+  }
+});
+
+document.querySelector('#filterDateStart').addEventListener('change', (e) => {
+  currentFilters.dateStart = e.target.value;
+  activeViewId = null;
+  updateFilterUI();
+  render();
+});
+
+document.querySelector('#filterDateEnd').addEventListener('change', (e) => {
+  currentFilters.dateEnd = e.target.value;
+  activeViewId = null;
+  updateFilterUI();
+  render();
+});
+
+document.querySelector('#filterLocation').addEventListener('change', (e) => {
+  currentFilters.locations = Array.from(e.target.selectedOptions).map(opt => opt.value);
+  activeViewId = null;
+  updateFilterUI();
+  render();
+});
+
+document.querySelector('#filterSource').addEventListener('change', (e) => {
+  currentFilters.sources = Array.from(e.target.selectedOptions).map(opt => opt.value);
+  activeViewId = null;
+  updateFilterUI();
+  render();
+});
+
+document.querySelector('#filterFeeling').addEventListener('change', (e) => {
+  currentFilters.feelings = Array.from(e.target.selectedOptions).map(opt => opt.value);
+  activeViewId = null;
+  updateFilterUI();
+  render();
+});
+
+document.querySelector('#filterDbMin').addEventListener('input', (e) => {
+  currentFilters.dbMin = e.target.value;
+  activeViewId = null;
+  updateFilterUI();
+  render();
+});
+
+document.querySelector('#filterDbMax').addEventListener('input', (e) => {
+  currentFilters.dbMax = e.target.value;
+  activeViewId = null;
+  updateFilterUI();
+  render();
+});
+
+document.querySelector('#filterHighNoise').addEventListener('change', (e) => {
+  currentFilters.highNoiseStatus = e.target.value;
+  activeViewId = null;
+  updateFilterUI();
+  render();
+});
+
+document.addEventListener('click', (e) => {
+  if (e.target.classList.contains('filter-tag-remove')) {
+    const index = parseInt(e.target.dataset.tagIndex);
+    removeFilterTag(index);
+  }
+  if (e.target.id === 'clearAllFilters') {
+    resetFilters();
+  }
+});
+
 document.querySelector('#toggleManualLocation').addEventListener('click', () => {
   useManualLocation = true;
   updateLocationInput();
@@ -712,6 +881,241 @@ function saveAlarms() {
 
 function saveAlarmConfig() {
   localStorage.setItem(alarmConfigKey, JSON.stringify(alarmConfig));
+}
+
+function saveFilterViews() {
+  localStorage.setItem(filterViewsKey, JSON.stringify(filterViews));
+}
+
+function getUniqueLocations() {
+  return [...new Set(records.map(r => r.location))].sort();
+}
+
+function getUniqueSources() {
+  return [...new Set(records.map(r => r.source))].sort();
+}
+
+function applyFilters(data) {
+  return data.filter(record => {
+    if (currentFilters.dateStart && record.at.slice(0, 10) < currentFilters.dateStart) {
+      return false;
+    }
+    if (currentFilters.dateEnd && record.at.slice(0, 10) > currentFilters.dateEnd) {
+      return false;
+    }
+    if (currentFilters.locations.length > 0 && !currentFilters.locations.includes(record.location)) {
+      return false;
+    }
+    if (currentFilters.sources.length > 0 && !currentFilters.sources.includes(record.source)) {
+      return false;
+    }
+    if (currentFilters.feelings.length > 0 && !currentFilters.feelings.includes(record.feeling)) {
+      return false;
+    }
+    if (currentFilters.dbMin !== '' && record.db < Number(currentFilters.dbMin)) {
+      return false;
+    }
+    if (currentFilters.dbMax !== '' && record.db > Number(currentFilters.dbMax)) {
+      return false;
+    }
+    if (currentFilters.highNoiseStatus === 'high' && !isHighNoise(record.db)) {
+      return false;
+    }
+    if (currentFilters.highNoiseStatus === 'normal' && isHighNoise(record.db)) {
+      return false;
+    }
+    return true;
+  });
+}
+
+function countActiveFilters() {
+  let count = 0;
+  if (currentFilters.dateStart) count++;
+  if (currentFilters.dateEnd) count++;
+  if (currentFilters.locations.length > 0) count++;
+  if (currentFilters.sources.length > 0) count++;
+  if (currentFilters.feelings.length > 0) count++;
+  if (currentFilters.dbMin !== '') count++;
+  if (currentFilters.dbMax !== '') count++;
+  if (currentFilters.highNoiseStatus !== 'all') count++;
+  return count;
+}
+
+function getActiveFilterTags() {
+  const tags = [];
+  if (currentFilters.dateStart || currentFilters.dateEnd) {
+    const start = currentFilters.dateStart || '不限';
+    const end = currentFilters.dateEnd || '不限';
+    tags.push({ label: `日期: ${start} ~ ${end}`, type: 'date' });
+  }
+  if (currentFilters.locations.length > 0) {
+    tags.push({ label: `地点: ${currentFilters.locations.join(', ')}`, type: 'location', values: currentFilters.locations });
+  }
+  if (currentFilters.sources.length > 0) {
+    tags.push({ label: `来源: ${currentFilters.sources.join(', ')}`, type: 'source', values: currentFilters.sources });
+  }
+  if (currentFilters.feelings.length > 0) {
+    tags.push({ label: `感受: ${currentFilters.feelings.join(', ')}`, type: 'feeling', values: currentFilters.feelings });
+  }
+  if (currentFilters.dbMin !== '' || currentFilters.dbMax !== '') {
+    const min = currentFilters.dbMin || '不限';
+    const max = currentFilters.dbMax || '不限';
+    tags.push({ label: `分贝: ${min} ~ ${max} dB`, type: 'db' });
+  }
+  if (currentFilters.highNoiseStatus === 'high') {
+    tags.push({ label: '状态: 仅高噪声', type: 'status' });
+  } else if (currentFilters.highNoiseStatus === 'normal') {
+    tags.push({ label: '状态: 仅正常噪声', type: 'status' });
+  }
+  return tags;
+}
+
+function resetFilters() {
+  currentFilters = {
+    dateStart: '',
+    dateEnd: '',
+    locations: [],
+    sources: [],
+    feelings: [],
+    dbMin: '',
+    dbMax: '',
+    highNoiseStatus: 'all'
+  };
+  activeViewId = null;
+  updateFilterUI();
+  render();
+}
+
+function updateFilterUI() {
+  document.querySelector('#filterDateStart').value = currentFilters.dateStart;
+  document.querySelector('#filterDateEnd').value = currentFilters.dateEnd;
+  document.querySelector('#filterDbMin').value = currentFilters.dbMin;
+  document.querySelector('#filterDbMax').value = currentFilters.dbMax;
+  document.querySelector('#filterHighNoise').value = currentFilters.highNoiseStatus;
+
+  const locationSelect = document.querySelector('#filterLocation');
+  const locations = getUniqueLocations();
+  locationSelect.innerHTML = locations.map(loc => 
+    `<option value="${loc}" ${currentFilters.locations.includes(loc) ? 'selected' : ''}>${loc}</option>`
+  ).join('');
+
+  const sourceSelect = document.querySelector('#filterSource');
+  const sources = getUniqueSources();
+  sourceSelect.innerHTML = sources.map(src => 
+    `<option value="${src}" ${currentFilters.sources.includes(src) ? 'selected' : ''}>${src}</option>`
+  ).join('');
+
+  const feelingSelect = document.querySelector('#filterFeeling');
+  Array.from(feelingSelect.options).forEach(option => {
+    option.selected = currentFilters.feelings.includes(option.value);
+  });
+
+  const filterCount = countActiveFilters();
+  document.querySelector('#filterCount').textContent = `${filterCount} 个筛选条件`;
+
+  const tags = getActiveFilterTags();
+  const tagsContainer = document.querySelector('#activeFilterTags');
+  if (tags.length > 0) {
+    tagsContainer.innerHTML = `
+      <div class="filter-tags-label">当前筛选：</div>
+      <div class="filter-tags-list">
+        ${tags.map((tag, index) => `
+          <span class="filter-tag">
+            ${tag.label}
+            <button class="filter-tag-remove" data-tag-index="${index}">&times;</button>
+          </span>
+        `).join('')}
+        <button class="filter-clear-all" id="clearAllFilters">清除全部</button>
+      </div>
+    `;
+  } else {
+    tagsContainer.innerHTML = '';
+  }
+
+  updateViewSelector();
+  document.querySelector('#deleteViewBtn').disabled = !activeViewId;
+}
+
+function updateViewSelector() {
+  const selector = document.querySelector('#viewSelector');
+  selector.innerHTML = '<option value="">选择常用视图</option>' +
+    filterViews.map(view => 
+      `<option value="${view.id}" ${activeViewId === view.id ? 'selected' : ''}>${view.name}</option>`
+    ).join('');
+}
+
+function saveCurrentView() {
+  const name = prompt('请输入视图名称：');
+  if (!name || name.trim() === '') return;
+
+  const newView = {
+    id: crypto.randomUUID(),
+    name: name.trim(),
+    filters: JSON.parse(JSON.stringify(currentFilters)),
+    createdAt: new Date().toISOString()
+  };
+
+  filterViews.push(newView);
+  saveFilterViews();
+  activeViewId = newView.id;
+  updateFilterUI();
+  alert(`视图"${name}"已保存`);
+}
+
+function loadView(viewId) {
+  const view = filterViews.find(v => v.id === viewId);
+  if (!view) return;
+
+  currentFilters = JSON.parse(JSON.stringify(view.filters));
+  activeViewId = viewId;
+  updateFilterUI();
+  render();
+}
+
+function deleteActiveView() {
+  if (!activeViewId) return;
+  const view = filterViews.find(v => v.id === activeViewId);
+  if (!view) return;
+
+  if (!confirm(`确定要删除视图"${view.name}"吗？`)) return;
+
+  filterViews = filterViews.filter(v => v.id !== activeViewId);
+  saveFilterViews();
+  activeViewId = null;
+  updateFilterUI();
+  alert('视图已删除');
+}
+
+function removeFilterTag(index) {
+  const tags = getActiveFilterTags();
+  if (index >= tags.length) return;
+
+  const tag = tags[index];
+  switch (tag.type) {
+    case 'date':
+      currentFilters.dateStart = '';
+      currentFilters.dateEnd = '';
+      break;
+    case 'location':
+      currentFilters.locations = [];
+      break;
+    case 'source':
+      currentFilters.sources = [];
+      break;
+    case 'feeling':
+      currentFilters.feelings = [];
+      break;
+    case 'db':
+      currentFilters.dbMin = '';
+      currentFilters.dbMax = '';
+      break;
+    case 'status':
+      currentFilters.highNoiseStatus = 'all';
+      break;
+  }
+  activeViewId = null;
+  updateFilterUI();
+  render();
 }
 
 function isNighttime(datetimeStr) {
@@ -1056,6 +1460,7 @@ function render() {
   if (!dayFilter.value && records[0]) dayFilter.value = records[0].at.slice(0, 10);
   updateMonitoringPointSelects();
   updateLocationInput();
+  updateFilterUI();
 
   let filtered = records.filter((record) => [record.location, record.source, record.feeling].join(' ').includes(search.value.trim()));
 
@@ -1063,9 +1468,11 @@ function render() {
     filtered = filtered.filter(record => record.monitoringPointId === selectedMonitoringPointFilter);
   }
 
+  filtered = applyFilters(filtered);
+
   const dayRecords = filtered.filter((record) => record.at.startsWith(dayFilter.value)).sort((a, b) => a.at.localeCompare(b.at));
 
-  const summaryRecords = selectedMonitoringPointFilter ? filtered : records;
+  const summaryRecords = filtered;
   document.querySelector('#summary').innerHTML = [
     ['观测数', summaryRecords.length],
     ['平均分贝', `${average(summaryRecords.map((record) => record.db)).toFixed(1)}dB`],

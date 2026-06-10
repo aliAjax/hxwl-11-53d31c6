@@ -1849,12 +1849,246 @@ button:disabled {
 @media print {
   .threshold-overlay,
   .monitoring-point-overlay,
-  .alarm-center-overlay {
+  .alarm-center-overlay,
+  .filter-panel {
     display: none !important;
   }
 
   .db-badge {
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
+  }
+}
+
+.filter-panel {
+  border: 1px solid #dfd3c5;
+  border-radius: 8px;
+  background: white;
+  box-shadow: 0 12px 30px rgba(64, 45, 31, .08);
+  margin: 18px 0;
+  overflow: hidden;
+}
+
+.filter-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  background: linear-gradient(135deg, #fff7ed 0%, #fef5f3 100%);
+  border-bottom: 1px solid #eee4db;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.filter-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.filter-title h2 {
+  margin: 0;
+  font-size: 18px;
+  color: #251e1a;
+}
+
+.filter-count {
+  background: #d94636;
+  color: white;
+  padding: 4px 12px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.filter-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.view-selector {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.view-selector select {
+  width: 180px;
+}
+
+.filter-body {
+  padding: 20px;
+}
+
+.filter-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 20px;
+  margin-bottom: 20px;
+}
+
+.filter-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.filter-group label {
+  font-weight: 600;
+  color: #251e1a;
+  font-size: 14px;
+}
+
+.filter-date-range,
+.filter-db-range {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.filter-separator {
+  color: #79695e;
+  font-weight: 500;
+}
+
+.filter-unit {
+  color: #79695e;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.filter-group select[multiple] {
+  min-height: 80px;
+  resize: vertical;
+}
+
+.filter-group select[multiple] option {
+  padding: 6px 8px;
+  cursor: pointer;
+}
+
+.filter-group select[multiple] option:hover {
+  background: #f4f1ec;
+}
+
+.filter-group select[multiple] option:checked {
+  background: #d94636;
+  color: white;
+}
+
+.filter-active-tags {
+  padding-top: 16px;
+  border-top: 1px dashed #dfd3c5;
+}
+
+.filter-tags-label {
+  font-weight: 600;
+  color: #251e1a;
+  font-size: 14px;
+  margin-bottom: 10px;
+}
+
+.filter-tags-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.filter-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #fef5f3;
+  border: 1px solid #f0c0b8;
+  color: #d94636;
+  padding: 6px 12px;
+  border-radius: 16px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.filter-tag-remove {
+  background: none;
+  border: none;
+  color: #d94636;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+  font-weight: bold;
+  transition: color 0.2s ease;
+}
+
+.filter-tag-remove:hover {
+  color: #b83526;
+}
+
+.filter-clear-all {
+  background: none;
+  border: 1px solid #dfd3c5;
+  color: #79695e;
+  padding: 6px 12px;
+  border-radius: 16px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.filter-clear-all:hover {
+  background: #f4f1ec;
+  color: #251e1a;
+  border-color: #d6c8ba;
+}
+
+@media (max-width: 900px) {
+  .filter-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .filter-actions {
+    justify-content: space-between;
+  }
+
+  .view-selector {
+    flex: 1;
+  }
+
+  .view-selector select {
+    width: 100%;
+  }
+}
+
+@media (max-width: 600px) {
+  .filter-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .view-selector {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .view-selector button {
+    width: 100%;
+  }
+
+  .filter-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .filter-date-range,
+  .filter-db-range {
+    flex-wrap: wrap;
+  }
+
+  .filter-date-range input,
+  .filter-db-range input {
+    flex: 1;
+    min-width: 120px;
   }
 }
