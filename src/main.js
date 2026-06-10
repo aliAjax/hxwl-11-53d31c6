@@ -7,6 +7,20 @@ const alarmsKey = 'hxwl-11-noise-alarms';
 const alarmConfigKey = 'hxwl-11-alarm-config';
 const filterViewsKey = 'hxwl-11-filter-views';
 const patrolTasksKey = 'hxwl-11-patrol-tasks';
+const complaintsKey = 'hxwl-11-noise-complaints';
+
+const complaintStatusLabels = {
+  pending: '待处理',
+  processing: '处理中',
+  resolved: '已解决',
+  closed: '已关闭'
+};
+
+const defaultComplaints = [
+  { id: crypto.randomUUID(), location: '老城菜市口', at: '2026-06-04T06:30', source: '叫卖喇叭', description: '早市商贩使用高音喇叭叫卖，严重影响周边居民休息', contact: '13800001111', status: 'pending', monitoringPointId: null, createdAt: new Date().toISOString() },
+  { id: crypto.randomUUID(), location: '社区广场', at: '2026-06-05T21:00', source: '广场舞音箱', description: '晚间广场舞音量过大，持续到22点以后', contact: '13900002222', status: 'processing', monitoringPointId: null, createdAt: new Date().toISOString() },
+  { id: crypto.randomUUID(), location: '高架桥下', at: '2026-06-06T07:15', source: '货车通行', description: '清晨货车经过，鸣笛声刺耳，整栋楼被震醒', contact: '13700003333', status: 'resolved', monitoringPointId: null, createdAt: new Date().toISOString() }
+];
 
 const patrolStatusLabels = {
   pending: '待巡查',
@@ -84,8 +98,17 @@ let editingPatrolTaskId = null;
 let patrolTaskStatusFilter = 'all';
 let patrolTaskPointFilter = '';
 
+let complaints = JSON.parse(localStorage.getItem(complaintsKey) || 'null') || defaultComplaints;
+let editingComplaintId = null;
+let complaintStatusFilter = 'all';
+let complaintLocationFilter = '';
+
 function savePatrolTasks() {
   localStorage.setItem(patrolTasksKey, JSON.stringify(patrolTasks));
+}
+
+function saveComplaints() {
+  localStorage.setItem(complaintsKey, JSON.stringify(complaints));
 }
 
 function toLocalDateTimeInputValue(date = new Date()) {
@@ -125,6 +148,7 @@ document.querySelector('#app').innerHTML = `
         <h1>城市噪声切片</h1>
       </div>
       <div class="topButtons">
+        <button id="complaintBtn">投诉登记</button>
         <button id="patrolTasksBtn">巡查任务</button>
         <button id="alarmCenterBtn">告警中心</button>
         <button id="monitoringPointsBtn">监测点管理</button>
@@ -684,6 +708,107 @@ document.querySelector('#app').innerHTML = `
       </div>
     </div>
 
+    <div class="complaint-overlay hidden" id="complaintOverlay">
+      <div class="complaint-panel">
+        <div class="complaint-header">
+          <h2>噪声投诉登记</h2>
+          <button class="complaint-close" id="complaintClose">&times;</button>
+        </div>
+        <div class="complaint-content">
+          <div class="complaint-summary">
+            <div class="complaint-stat-card pending">
+              <span class="complaint-stat-label">待处理</span>
+              <strong class="complaint-stat-value" id="complaintPendingCount">0</strong>
+            </div>
+            <div class="complaint-stat-card processing">
+              <span class="complaint-stat-label">处理中</span>
+              <strong class="complaint-stat-value" id="complaintProcessingCount">0</strong>
+            </div>
+            <div class="complaint-stat-card resolved">
+              <span class="complaint-stat-label">已解决</span>
+              <strong class="complaint-stat-value" id="complaintResolvedCount">0</strong>
+            </div>
+            <div class="complaint-stat-card closed">
+              <span class="complaint-stat-label">已关闭</span>
+              <strong class="complaint-stat-value" id="complaintClosedCount">0</strong>
+            </div>
+            <div class="complaint-stat-card total">
+              <span class="complaint-stat-label">总计</span>
+              <strong class="complaint-stat-value" id="complaintTotalCount">0</strong>
+            </div>
+          </div>
+
+          <div class="complaint-filters">
+            <div class="filter-group">
+              <label>状态筛选：</label>
+              <select id="complaintStatusFilterSelect">
+                <option value="all">全部状态</option>
+                <option value="pending">待处理</option>
+                <option value="processing">处理中</option>
+                <option value="resolved">已解决</option>
+                <option value="closed">已关闭</option>
+              </select>
+            </div>
+            <div class="filter-group">
+              <label>地点搜索：</label>
+              <input type="text" id="complaintLocationSearch" placeholder="输入投诉地点关键词" />
+            </div>
+            <button class="primary" id="newComplaintBtn">+ 新建投诉</button>
+          </div>
+
+          <div class="complaint-form-section hidden" id="complaintFormSection">
+            <h3 id="complaintFormTitle">新建噪声投诉</h3>
+            <form id="complaintForm" class="complaint-form">
+              <div class="complaint-form-grid">
+                <div>
+                  <label>投诉地点 <span style="color:#d94636">*</span></label>
+                  <input name="location" id="complaintLocation" placeholder="噪声发生的地点" required />
+                </div>
+                <div>
+                  <label>发生时间 <span style="color:#d94636">*</span></label>
+                  <input name="at" type="datetime-local" id="complaintAt" required />
+                </div>
+                <div>
+                  <label>噪声来源 <span style="color:#d94636">*</span></label>
+                  <input name="source" id="complaintSource" placeholder="如：施工、广场舞、交通等" required />
+                </div>
+                <div>
+                  <label>联系方式 <span style="color:#d94636">*</span></label>
+                  <input name="contact" id="complaintContact" placeholder="手机号或固话" required />
+                </div>
+                <div>
+                  <label>处理状态</label>
+                  <select name="status" id="complaintStatus">
+                    <option value="pending">待处理</option>
+                    <option value="processing">处理中</option>
+                    <option value="resolved">已解决</option>
+                    <option value="closed">已关闭</option>
+                  </select>
+                </div>
+                <div class="complaint-point-info hidden" id="complaintPointInfo">
+                  <label>关联监测点</label>
+                  <div class="complaint-point-badge" id="complaintPointBadge"></div>
+                </div>
+                <div class="form-full">
+                  <label>问题描述 <span style="color:#d94636">*</span></label>
+                  <textarea name="description" id="complaintDescription" placeholder="请详细描述噪声情况，如持续时间、影响范围等" rows="3" required></textarea>
+                </div>
+              </div>
+              <div class="complaint-form-actions">
+                <button type="button" class="secondary" id="cancelComplaintEdit">取消</button>
+                <button type="submit" class="primary">提交投诉</button>
+              </div>
+            </form>
+          </div>
+
+          <div class="complaint-list-section">
+            <h3>投诉列表</h3>
+            <div id="complaintsList" class="complaints-list"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div class="confirm-overlay hidden" id="confirmOverlay">
       <div class="confirm-panel">
         <div class="confirm-header">
@@ -956,8 +1081,10 @@ monitoringPointForm.addEventListener('submit', (event) => {
 document.querySelector('#reset').addEventListener('click', () => {
   records = seed;
   monitoringPoints = defaultMonitoringPoints;
+  complaints = defaultComplaints;
   save();
   saveMonitoringPoints();
+  saveComplaints();
   recalculateAlarms();
   updateMonitoringPointSelects();
   render();
@@ -2107,6 +2234,8 @@ document.addEventListener('keydown', (e) => {
       closeConfirmDialog();
     } else if (!document.querySelector('#viewSaveOverlay').classList.contains('hidden')) {
       closeSaveViewDialog();
+    } else if (!document.querySelector('#complaintOverlay').classList.contains('hidden')) {
+      closeComplaints();
     } else if (!document.querySelector('#alarmCenterOverlay').classList.contains('hidden')) {
       closeAlarmCenter();
     } else if (!document.querySelector('#monitoringPointOverlay').classList.contains('hidden')) {
@@ -2914,11 +3043,294 @@ function escapeHtml(text) {
 const _originalKeyHandler = document.onkeydown;
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
-    if (!document.querySelector('#patrolTasksOverlay').classList.contains('hidden')) {
+    if (!document.querySelector('#complaintOverlay').classList.contains('hidden')) {
+      closeComplaints();
+    } else if (!document.querySelector('#patrolTasksOverlay').classList.contains('hidden')) {
       closePatrolTasks();
     }
   }
 });
+
+function findMatchingMonitoringPoint(location) {
+  return monitoringPoints.find(p => p.name === location) || null;
+}
+
+function updateComplaintPointInfo() {
+  const location = document.querySelector('#complaintLocation').value.trim();
+  const pointInfoEl = document.querySelector('#complaintPointInfo');
+  const pointBadgeEl = document.querySelector('#complaintPointBadge');
+
+  if (!location) {
+    pointInfoEl.classList.add('hidden');
+    return;
+  }
+
+  const point = findMatchingMonitoringPoint(location);
+  if (point) {
+    const typeInfo = getPointTypeInfo(point.type);
+    pointInfoEl.classList.remove('hidden');
+    pointBadgeEl.innerHTML = `
+      <div class="complaint-point-detail">
+        <span class="point-type-badge ${typeInfo.colorClass}">${typeInfo.label}</span>
+        <span class="complaint-point-name">${point.name}</span>
+        <span class="complaint-point-district">${point.district}</span>
+        <span class="complaint-point-coords">${point.latitude.toFixed(4)}, ${point.longitude.toFixed(4)}</span>
+        ${point.notes ? `<span class="complaint-point-notes">${escapeHtml(point.notes)}</span>` : ''}
+      </div>
+    `;
+  } else {
+    pointInfoEl.classList.add('hidden');
+  }
+}
+
+function openComplaints() {
+  document.querySelector('#complaintOverlay').classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+  editingComplaintId = null;
+  hideComplaintForm();
+  renderComplaints();
+}
+
+function closeComplaints() {
+  document.querySelector('#complaintOverlay').classList.add('hidden');
+  document.body.style.overflow = '';
+  editingComplaintId = null;
+  hideComplaintForm();
+}
+
+function showComplaintForm(complaint) {
+  const section = document.querySelector('#complaintFormSection');
+  const title = document.querySelector('#complaintFormTitle');
+  section.classList.remove('hidden');
+
+  if (complaint) {
+    title.textContent = '编辑噪声投诉';
+    document.querySelector('#complaintLocation').value = complaint.location || '';
+    document.querySelector('#complaintAt').value = complaint.at || '';
+    document.querySelector('#complaintSource').value = complaint.source || '';
+    document.querySelector('#complaintContact').value = complaint.contact || '';
+    document.querySelector('#complaintStatus').value = complaint.status || 'pending';
+    document.querySelector('#complaintDescription').value = complaint.description || '';
+  } else {
+    title.textContent = '新建噪声投诉';
+    document.querySelector('#complaintForm').reset();
+    document.querySelector('#complaintStatus').value = 'pending';
+    document.querySelector('#complaintAt').value = toLocalDateTimeInputValue();
+  }
+
+  updateComplaintPointInfo();
+  section.scrollIntoView({ behavior: 'smooth' });
+}
+
+function hideComplaintForm() {
+  document.querySelector('#complaintFormSection').classList.add('hidden');
+  document.querySelector('#complaintForm').reset();
+  document.querySelector('#complaintPointInfo').classList.add('hidden');
+}
+
+function handleComplaintFormSubmit(event) {
+  event.preventDefault();
+  const data = Object.fromEntries(new FormData(document.querySelector('#complaintForm')).entries());
+
+  if (!data.location.trim()) {
+    alert('请填写投诉地点');
+    return;
+  }
+
+  const now = new Date();
+  const nowIso = now.toISOString();
+  const matchedPoint = findMatchingMonitoringPoint(data.location.trim());
+
+  const complaint = {
+    id: editingComplaintId || crypto.randomUUID(),
+    location: data.location.trim(),
+    at: data.at,
+    source: data.source.trim(),
+    description: data.description.trim(),
+    contact: data.contact.trim(),
+    status: data.status || 'pending',
+    monitoringPointId: matchedPoint ? matchedPoint.id : null,
+    createdAt: editingComplaintId ? (complaints.find(c => c.id === editingComplaintId)?.createdAt || nowIso) : nowIso,
+    updatedAt: nowIso
+  };
+
+  if (editingComplaintId) {
+    complaints = complaints.map(c => c.id === editingComplaintId ? complaint : c);
+  } else {
+    complaints = [complaint, ...complaints];
+  }
+
+  saveComplaints();
+  editingComplaintId = null;
+  hideComplaintForm();
+  renderComplaints();
+}
+
+function updateComplaintStatus(complaintId, newStatus) {
+  const now = new Date();
+  complaints = complaints.map(c => {
+    if (c.id === complaintId) {
+      return { ...c, status: newStatus, updatedAt: now.toISOString() };
+    }
+    return c;
+  });
+  saveComplaints();
+  renderComplaints();
+}
+
+function deleteComplaint(complaintId) {
+  const complaint = complaints.find(c => c.id === complaintId);
+  if (!complaint) return;
+
+  openConfirmDialog('删除投诉', `确定要删除地点"${complaint.location}"的噪声投诉吗？`, () => {
+    complaints = complaints.filter(c => c.id !== complaintId);
+    saveComplaints();
+    renderComplaints();
+  });
+}
+
+function editComplaint(complaintId) {
+  const complaint = complaints.find(c => c.id === complaintId);
+  if (!complaint) return;
+  editingComplaintId = complaintId;
+  showComplaintForm(complaint);
+}
+
+function renderComplaints() {
+  const pending = complaints.filter(c => c.status === 'pending').length;
+  const processing = complaints.filter(c => c.status === 'processing').length;
+  const resolved = complaints.filter(c => c.status === 'resolved').length;
+  const closed = complaints.filter(c => c.status === 'closed').length;
+
+  document.querySelector('#complaintPendingCount').textContent = pending;
+  document.querySelector('#complaintProcessingCount').textContent = processing;
+  document.querySelector('#complaintResolvedCount').textContent = resolved;
+  document.querySelector('#complaintClosedCount').textContent = closed;
+  document.querySelector('#complaintTotalCount').textContent = complaints.length;
+
+  let filtered = [...complaints];
+
+  if (complaintStatusFilter !== 'all') {
+    filtered = filtered.filter(c => c.status === complaintStatusFilter);
+  }
+  if (complaintLocationFilter) {
+    const keyword = complaintLocationFilter.toLowerCase();
+    filtered = filtered.filter(c => c.location.toLowerCase().includes(keyword));
+  }
+
+  filtered.sort((a, b) => {
+    const statusOrder = { pending: 0, processing: 1, resolved: 2, closed: 3 };
+    const sDiff = statusOrder[a.status] - statusOrder[b.status];
+    if (sDiff !== 0) return sDiff;
+    return new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt);
+  });
+
+  const listEl = document.querySelector('#complaintsList');
+
+  if (!filtered.length) {
+    listEl.innerHTML = '<p class="empty">暂无匹配的投诉记录</p>';
+    return;
+  }
+
+  listEl.innerHTML = filtered.map(complaint => {
+    const point = complaint.monitoringPointId ? getMonitoringPointById(complaint.monitoringPointId) : null;
+    const autoMatchedPoint = !point ? findMatchingMonitoringPoint(complaint.location) : null;
+    const displayPoint = point || autoMatchedPoint;
+    const typeInfo = displayPoint ? getPointTypeInfo(displayPoint.type) : null;
+
+    return `
+      <div class="complaint-item complaint-status-${complaint.status}">
+        <div class="complaint-item-head">
+          <div class="complaint-item-location">
+            <strong>${escapeHtml(complaint.location)}</strong>
+            ${typeInfo ? `<span class="point-type-badge ${typeInfo.colorClass}" style="margin-left:8px;">${typeInfo.label}</span>` : ''}
+          </div>
+          <span class="complaint-status-badge complaint-status-${complaint.status}">${complaintStatusLabels[complaint.status]}</span>
+        </div>
+        <div class="complaint-item-info">
+          <div class="complaint-info-row">
+            <span>📅 ${complaint.at ? complaint.at.replace('T', ' ') : '未设置'}</span>
+            <span>🔊 ${escapeHtml(complaint.source)}</span>
+            <span>📞 ${escapeHtml(complaint.contact)}</span>
+          </div>
+        </div>
+        <div class="complaint-item-desc">${escapeHtml(complaint.description)}</div>
+        ${displayPoint ? `
+          <div class="complaint-item-point">
+            <span class="complaint-point-label">📍 关联监测点：</span>
+            <span class="point-type-badge ${typeInfo.colorClass}">${typeInfo.label}</span>
+            <span>${escapeHtml(displayPoint.name)}</span>
+            <span style="color:#79695e;">${displayPoint.district}</span>
+            <span style="color:#a89c90;font-size:11px;">${displayPoint.latitude.toFixed(4)}, ${displayPoint.longitude.toFixed(4)}</span>
+            ${displayPoint.notes ? `<span style="color:#a89c90;font-size:11px;">${escapeHtml(displayPoint.notes)}</span>` : ''}
+          </div>
+        ` : ''}
+        <div class="complaint-item-footer">
+          <span class="complaint-item-time">投诉于 ${new Date(complaint.createdAt).toLocaleString('zh-CN')}</span>
+          <div class="complaint-item-actions">
+            ${complaint.status === 'pending' ? `
+              <button class="secondary" data-complaint-process="${complaint.id}">处理</button>
+            ` : ''}
+            ${complaint.status === 'processing' ? `
+              <button class="primary" data-complaint-resolve="${complaint.id}">已解决</button>
+            ` : ''}
+            ${complaint.status === 'resolved' ? `
+              <button class="secondary" data-complaint-close="${complaint.id}">关闭</button>
+            ` : ''}
+            ${complaint.status === 'closed' ? `
+              <button class="secondary" data-complaint-reopen="${complaint.id}">重新打开</button>
+            ` : ''}
+            <button class="secondary" data-complaint-edit="${complaint.id}">编辑</button>
+            <button class="secondary" data-complaint-del="${complaint.id}">删除</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  listEl.querySelectorAll('[data-complaint-process]').forEach(btn => {
+    btn.addEventListener('click', () => updateComplaintStatus(btn.dataset.complaintProcess, 'processing'));
+  });
+  listEl.querySelectorAll('[data-complaint-resolve]').forEach(btn => {
+    btn.addEventListener('click', () => updateComplaintStatus(btn.dataset.complaintResolve, 'resolved'));
+  });
+  listEl.querySelectorAll('[data-complaint-close]').forEach(btn => {
+    btn.addEventListener('click', () => updateComplaintStatus(btn.dataset.complaintClose, 'closed'));
+  });
+  listEl.querySelectorAll('[data-complaint-reopen]').forEach(btn => {
+    btn.addEventListener('click', () => updateComplaintStatus(btn.dataset.complaintReopen, 'pending'));
+  });
+  listEl.querySelectorAll('[data-complaint-edit]').forEach(btn => {
+    btn.addEventListener('click', () => editComplaint(btn.dataset.complaintEdit));
+  });
+  listEl.querySelectorAll('[data-complaint-del]').forEach(btn => {
+    btn.addEventListener('click', () => deleteComplaint(btn.dataset.complaintDel));
+  });
+}
+
+document.querySelector('#complaintBtn').addEventListener('click', openComplaints);
+document.querySelector('#complaintClose').addEventListener('click', closeComplaints);
+document.querySelector('#complaintOverlay').addEventListener('click', (e) => {
+  if (e.target.id === 'complaintOverlay') closeComplaints();
+});
+document.querySelector('#newComplaintBtn').addEventListener('click', () => {
+  editingComplaintId = null;
+  showComplaintForm(null);
+});
+document.querySelector('#cancelComplaintEdit').addEventListener('click', () => {
+  editingComplaintId = null;
+  hideComplaintForm();
+});
+document.querySelector('#complaintForm').addEventListener('submit', handleComplaintFormSubmit);
+document.querySelector('#complaintStatusFilterSelect').addEventListener('change', (e) => {
+  complaintStatusFilter = e.target.value;
+  renderComplaints();
+});
+document.querySelector('#complaintLocationSearch').addEventListener('input', (e) => {
+  complaintLocationFilter = e.target.value.trim();
+  renderComplaints();
+});
+document.querySelector('#complaintLocation').addEventListener('input', updateComplaintPointInfo);
 
 recalculateAlarms();
 render();
