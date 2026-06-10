@@ -542,6 +542,39 @@ document.querySelector('#app').innerHTML = `
         </div>
       </div>
     </div>
+
+    <div class="view-save-overlay hidden" id="viewSaveOverlay">
+      <div class="view-save-panel">
+        <div class="view-save-header">
+          <h2>保存视图</h2>
+          <button class="view-save-close" id="viewSaveClose">&times;</button>
+        </div>
+        <div class="view-save-content">
+          <label>视图名称</label>
+          <input type="text" id="viewNameInput" placeholder="请输入视图名称" />
+          <p class="view-save-tip">保存当前的筛选条件，下次可快速切换</p>
+        </div>
+        <div class="view-save-actions">
+          <button class="secondary" id="cancelSaveView">取消</button>
+          <button class="primary" id="confirmSaveView">保存</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="confirm-overlay hidden" id="confirmOverlay">
+      <div class="confirm-panel">
+        <div class="confirm-header">
+          <h2 id="confirmTitle">确认</h2>
+        </div>
+        <div class="confirm-content">
+          <p id="confirmMessage">确定要执行此操作吗？</p>
+        </div>
+        <div class="confirm-actions">
+          <button class="secondary" id="confirmCancel">取消</button>
+          <button class="primary" id="confirmOk">确定</button>
+        </div>
+      </div>
+    </div>
   </main>
 `;
 
@@ -613,6 +646,22 @@ document.querySelector('#viewSelector').addEventListener('change', (e) => {
     activeViewId = null;
     updateFilterUI();
   }
+});
+
+document.querySelector('#viewSaveClose').addEventListener('click', closeSaveViewDialog);
+document.querySelector('#cancelSaveView').addEventListener('click', closeSaveViewDialog);
+document.querySelector('#viewSaveOverlay').addEventListener('click', (e) => {
+  if (e.target.id === 'viewSaveOverlay') closeSaveViewDialog();
+});
+document.querySelector('#confirmSaveView').addEventListener('click', doSaveView);
+document.querySelector('#viewNameInput').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') doSaveView();
+});
+
+document.querySelector('#confirmCancel').addEventListener('click', closeConfirmDialog);
+document.querySelector('#confirmOk').addEventListener('click', handleConfirmOk);
+document.querySelector('#confirmOverlay').addEventListener('click', (e) => {
+  if (e.target.id === 'confirmOverlay') closeConfirmDialog();
 });
 
 document.querySelector('#filterDateStart').addEventListener('change', (e) => {
@@ -1044,13 +1093,34 @@ function updateViewSelector() {
     ).join('');
 }
 
+let confirmCallback = null;
+
+function openSaveViewDialog() {
+  document.querySelector('#viewSaveOverlay').classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+  document.querySelector('#viewNameInput').value = '';
+  document.querySelector('#viewNameInput').focus();
+}
+
+function closeSaveViewDialog() {
+  document.querySelector('#viewSaveOverlay').classList.add('hidden');
+  document.body.style.overflow = '';
+}
+
 function saveCurrentView() {
-  const name = prompt('请输入视图名称：');
-  if (!name || name.trim() === '') return;
+  openSaveViewDialog();
+}
+
+function doSaveView() {
+  const name = document.querySelector('#viewNameInput').value.trim();
+  if (!name) {
+    openConfirmDialog('提示', '请输入视图名称', null);
+    return;
+  }
 
   const newView = {
     id: crypto.randomUUID(),
-    name: name.trim(),
+    name: name,
     filters: JSON.parse(JSON.stringify(currentFilters)),
     createdAt: new Date().toISOString()
   };
@@ -1058,8 +1128,29 @@ function saveCurrentView() {
   filterViews.push(newView);
   saveFilterViews();
   activeViewId = newView.id;
+  closeSaveViewDialog();
   updateFilterUI();
-  alert(`视图"${name}"已保存`);
+}
+
+function openConfirmDialog(title, message, callback) {
+  document.querySelector('#confirmTitle').textContent = title;
+  document.querySelector('#confirmMessage').textContent = message;
+  confirmCallback = callback;
+  document.querySelector('#confirmOverlay').classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+}
+
+function closeConfirmDialog() {
+  document.querySelector('#confirmOverlay').classList.add('hidden');
+  document.body.style.overflow = '';
+  confirmCallback = null;
+}
+
+function handleConfirmOk() {
+  if (confirmCallback) {
+    confirmCallback();
+  }
+  closeConfirmDialog();
 }
 
 function loadView(viewId) {
@@ -1077,13 +1168,12 @@ function deleteActiveView() {
   const view = filterViews.find(v => v.id === activeViewId);
   if (!view) return;
 
-  if (!confirm(`确定要删除视图"${view.name}"吗？`)) return;
-
-  filterViews = filterViews.filter(v => v.id !== activeViewId);
-  saveFilterViews();
-  activeViewId = null;
-  updateFilterUI();
-  alert('视图已删除');
+  openConfirmDialog('删除视图', `确定要删除视图"${view.name}"吗？`, () => {
+    filterViews = filterViews.filter(v => v.id !== activeViewId);
+    saveFilterViews();
+    activeViewId = null;
+    updateFilterUI();
+  });
 }
 
 function removeFilterTag(index) {
@@ -1882,7 +1972,11 @@ document.querySelector('#locationDetailOverlay').addEventListener('click', (e) =
 });
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
-    if (!document.querySelector('#alarmCenterOverlay').classList.contains('hidden')) {
+    if (!document.querySelector('#confirmOverlay').classList.contains('hidden')) {
+      closeConfirmDialog();
+    } else if (!document.querySelector('#viewSaveOverlay').classList.contains('hidden')) {
+      closeSaveViewDialog();
+    } else if (!document.querySelector('#alarmCenterOverlay').classList.contains('hidden')) {
       closeAlarmCenter();
     } else if (!document.querySelector('#monitoringPointOverlay').classList.contains('hidden')) {
       closeMonitoringPointPanel();

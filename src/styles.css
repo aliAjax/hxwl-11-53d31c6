@@ -2092,3 +2092,141 @@ button:disabled {
     min-width: 120px;
   }
 }
+
+.view-save-overlay,
+.confirm-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(37, 30, 26, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 20px;
+}
+
+.view-save-panel,
+.confirm-panel {
+  background: white;
+  border-radius: 12px;
+  width: 100%;
+  max-width: 420px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  animation: modalFadeIn 0.2s ease;
+}
+
+@keyframes modalFadeIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95) translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.view-save-header,
+.confirm-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 18px 22px;
+  border-bottom: 1px solid #eee4db;
+}
+
+.view-save-header h2,
+.confirm-header h2 {
+  margin: 0;
+  font-size: 18px;
+  color: #251e1a;
+}
+
+.view-save-close {
+  background: none;
+  border: none;
+  font-size: 28px;
+  color: #79695e;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  transition: all 0.2s ease;
+}
+
+.view-save-close:hover {
+  background: #f4f1ec;
+  color: #251e1a;
+}
+
+.view-save-content,
+.confirm-content {
+  padding: 22px;
+}
+
+.view-save-content label {
+  display: block;
+  font-weight: 600;
+  color: #251e1a;
+  margin-bottom: 8px;
+  font-size: 14px;
+}
+
+.view-save-content input[type="text"] {
+  width: 100%;
+  padding: 10px 14px;
+  border: 1px solid #dfd3c5;
+  border-radius: 6px;
+  font-size: 14px;
+  box-sizing: border-box;
+  transition: border-color 0.2s ease;
+}
+
+.view-save-content input[type="text"]:focus {
+  outline: none;
+  border-color: #d94636;
+  box-shadow: 0 0 0 3px rgba(217, 70, 54, 0.1);
+}
+
+.view-save-tip {
+  margin: 12px 0 0 0;
+  font-size: 13px;
+  color: #79695e;
+}
+
+.confirm-content p {
+  margin: 0;
+  font-size: 15px;
+  color: #251e1a;
+  line-height: 1.6;
+}
+
+.view-save-actions,
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 16px 22px;
+  border-top: 1px solid #eee4db;
+  background: #faf7f4;
+  border-radius: 0 0 12px 12px;
+}
+
+.hidden {
+  display: none !important;
+}
+
+@media print {
+  .view-save-overlay,
+  .confirm-overlay {
+    display: none !important;
+  }
+}
