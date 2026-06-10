@@ -136,6 +136,7 @@ function migrateData() {
   });
 
   save();
+  saveMonitoringPoints();
 }
 
 migrateData();
@@ -150,6 +151,7 @@ document.querySelector('#app').innerHTML = `
       <div class="topButtons">
         <button id="complaintBtn">投诉登记</button>
         <button id="patrolTasksBtn">巡查任务</button>
+        <button id="healthDashboardBtn">健康看板</button>
         <button id="alarmCenterBtn">告警中心</button>
         <button id="monitoringPointsBtn">监测点管理</button>
         <button id="thresholdBtn">阈值设置</button>
@@ -809,6 +811,36 @@ document.querySelector('#app').innerHTML = `
       </div>
     </div>
 
+    <div class="health-dashboard-overlay hidden" id="healthDashboardOverlay">
+      <div class="health-dashboard-panel">
+        <div class="health-dashboard-header">
+          <h2>监测点健康看板</h2>
+          <button class="health-dashboard-close" id="healthDashboardClose">&times;</button>
+        </div>
+        <div class="health-dashboard-content">
+          <div class="health-summary">
+            <div class="health-stat-card normal">
+              <span class="health-stat-label">正常</span>
+              <strong class="health-stat-value" id="healthNormalCount">0</strong>
+            </div>
+            <div class="health-stat-card warning">
+              <span class="health-stat-label">待补采</span>
+              <strong class="health-stat-value" id="healthWarningCount">0</strong>
+            </div>
+            <div class="health-stat-card nodata">
+              <span class="health-stat-label">无记录</span>
+              <strong class="health-stat-value" id="healthNoDataCount">0</strong>
+            </div>
+            <div class="health-stat-card total">
+              <span class="health-stat-label">总计</span>
+              <strong class="health-stat-value" id="healthTotalCount">0</strong>
+            </div>
+          </div>
+          <div id="healthDashboardList" class="health-dashboard-list"></div>
+        </div>
+      </div>
+    </div>
+
     <div class="confirm-overlay hidden" id="confirmOverlay">
       <div class="confirm-panel">
         <div class="confirm-header">
@@ -1082,8 +1114,7 @@ document.querySelector('#reset').addEventListener('click', () => {
   records = seed;
   monitoringPoints = defaultMonitoringPoints;
   complaints = defaultComplaints;
-  save();
-  saveMonitoringPoints();
+  migrateData();
   saveComplaints();
   recalculateAlarms();
   updateMonitoringPointSelects();
@@ -2236,6 +2267,8 @@ document.addEventListener('keydown', (e) => {
       closeSaveViewDialog();
     } else if (!document.querySelector('#complaintOverlay').classList.contains('hidden')) {
       closeComplaints();
+    } else if (!document.querySelector('#healthDashboardOverlay').classList.contains('hidden')) {
+      closeHealthDashboard();
     } else if (!document.querySelector('#alarmCenterOverlay').classList.contains('hidden')) {
       closeAlarmCenter();
     } else if (!document.querySelector('#monitoringPointOverlay').classList.contains('hidden')) {
@@ -3313,6 +3346,149 @@ document.querySelector('#complaintClose').addEventListener('click', closeComplai
 document.querySelector('#complaintOverlay').addEventListener('click', (e) => {
   if (e.target.id === 'complaintOverlay') closeComplaints();
 });
+
+document.querySelector('#healthDashboardBtn').addEventListener('click', openHealthDashboard);
+document.querySelector('#healthDashboardClose').addEventListener('click', closeHealthDashboard);
+document.querySelector('#healthDashboardOverlay').addEventListener('click', (e) => {
+  if (e.target.id === 'healthDashboardOverlay') closeHealthDashboard();
+});
+
+function openHealthDashboard() {
+  document.querySelector('#healthDashboardOverlay').classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+  renderHealthDashboard();
+}
+
+function closeHealthDashboard() {
+  document.querySelector('#healthDashboardOverlay').classList.add('hidden');
+  document.body.style.overflow = '';
+}
+
+function computePointHealth(point) {
+  const now = new Date();
+  const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const sevenDaysAgoStr = sevenDaysAgo.toISOString().slice(0, 16);
+
+  const pointRecords = records.filter(r => r.monitoringPointId === point.id);
+  const recentRecords = pointRecords.filter(r => r.at >= sevenDaysAgoStr);
+  const lastRecord = pointRecords.sort((a, b) => b.at.localeCompare(a.at))[0] || null;
+  const maxDb7d = recentRecords.length ? Math.max(...recentRecords.map(r => r.db)) : null;
+
+  let dataStatus = 'normal';
+  let daysSinceLast = null;
+
+  if (!lastRecord) {
+    dataStatus = 'nodata';
+  } else {
+    const lastDate = new Date(lastRecord.at);
+    daysSinceLast = Math.floor((now - lastDate) / (1000 * 60 * 60 * 24));
+    if (daysSinceLast > 3) {
+      dataStatus = 'warning';
+    }
+  }
+
+  return {
+    point,
+    lastRecordTime: lastRecord ? lastRecord.at : null,
+    daysSinceLast,
+    recentCount7d: recentRecords.length,
+    maxDb7d,
+    dataStatus
+  };
+}
+
+function renderHealthDashboard() {
+  const healthData = monitoringPoints.map(p => computePointHealth(p));
+
+  const normalCount = healthData.filter(h => h.dataStatus === 'normal').length;
+  const warningCount = healthData.filter(h => h.dataStatus === 'warning').length;
+  const noDataCount = healthData.filter(h => h.dataStatus === 'nodata').length;
+
+  document.querySelector('#healthNormalCount').textContent = normalCount;
+  document.querySelector('#healthWarningCount').textContent = warningCount;
+  document.querySelector('#healthNoDataCount').textContent = noDataCount;
+  document.querySelector('#healthTotalCount').textContent = healthData.length;
+
+  const listEl = document.querySelector('#healthDashboardList');
+
+  if (!healthData.length) {
+    listEl.innerHTML = '<p class="empty">暂无监测点数据</p>';
+    return;
+  }
+
+  const statusOrder = { warning: 0, nodata: 1, normal: 2 };
+  healthData.sort((a, b) => {
+    const sDiff = statusOrder[a.dataStatus] - statusOrder[b.dataStatus];
+    if (sDiff !== 0) return sDiff;
+    return a.point.name.localeCompare(b.point.name);
+  });
+
+  listEl.innerHTML = healthData.map(h => {
+    const typeInfo = getPointTypeInfo(h.point.type);
+    const statusClass = `health-status-${h.dataStatus}`;
+    const statusLabel = { normal: '正常', warning: '待补采', nodata: '无记录' }[h.dataStatus];
+    const statusIcon = { normal: '✅', warning: '⚠️', nodata: '❌' }[h.dataStatus];
+
+    let lastTimeDisplay = '--';
+    if (h.lastRecordTime) {
+      lastTimeDisplay = h.lastRecordTime.replace('T', ' ');
+    }
+
+    let daysDisplay = '--';
+    if (h.daysSinceLast !== null) {
+      daysDisplay = h.daysSinceLast === 0 ? '今天' : `${h.daysSinceLast}天前`;
+    }
+
+    return `
+      <div class="health-point-card ${statusClass}" data-health-point-id="${h.point.id}">
+        <div class="health-point-head">
+          <div class="health-point-title">
+            <strong>${h.point.name}</strong>
+            <span class="point-type-badge ${typeInfo.colorClass}">${typeInfo.label}</span>
+          </div>
+          <span class="health-status-badge ${statusClass}">${statusIcon} ${statusLabel}</span>
+        </div>
+        <div class="health-point-stats">
+          <div class="health-point-stat">
+            <span class="health-stat-name">最近记录</span>
+            <span class="health-stat-val">${lastTimeDisplay}</span>
+          </div>
+          <div class="health-point-stat">
+            <span class="health-stat-name">距今天数</span>
+            <span class="health-stat-val">${daysDisplay}</span>
+          </div>
+          <div class="health-point-stat">
+            <span class="health-stat-name">7天记录数</span>
+            <span class="health-stat-val">${h.recentCount7d}</span>
+          </div>
+          <div class="health-point-stat">
+            <span class="health-stat-name">7天最高分贝</span>
+            <span class="health-stat-val">${h.maxDb7d !== null ? h.maxDb7d + 'dB' : '--'}</span>
+          </div>
+          <div class="health-point-stat">
+            <span class="health-stat-name">数据状态</span>
+            <span class="health-stat-val">${statusIcon} ${statusLabel}</span>
+          </div>
+        </div>
+        <div class="health-point-footer">
+          <span class="health-point-district">📍 ${h.point.district}</span>
+          <button class="secondary" data-health-detail="${h.point.id}">查看详情</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  listEl.querySelectorAll('[data-health-detail]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const pointId = btn.dataset.healthDetail;
+      const point = getMonitoringPointById(pointId);
+      if (point) {
+        closeHealthDashboard();
+        openLocationDetail(point.name);
+      }
+    });
+  });
+}
 document.querySelector('#newComplaintBtn').addEventListener('click', () => {
   editingComplaintId = null;
   showComplaintForm(null);
