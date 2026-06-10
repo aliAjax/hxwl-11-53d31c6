@@ -88,6 +88,10 @@ function savePatrolTasks() {
   localStorage.setItem(patrolTasksKey, JSON.stringify(patrolTasks));
 }
 
+function toLocalDateTimeInputValue(date = new Date()) {
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+}
+
 function migrateData() {
   records = records.map(record => {
     if (record.monitoringPointId === undefined) {
@@ -124,7 +128,6 @@ document.querySelector('#app').innerHTML = `
         <button id="patrolTasksBtn">巡查任务</button>
         <button id="alarmCenterBtn">告警中心</button>
         <button id="monitoringPointsBtn">监测点管理</button>
-        <button id="noiseMapBtn">噪声态势地图</button>
         <button id="thresholdBtn">阈值设置</button>
         <button id="reportBtn">生成报告</button>
         <button id="reset">载入示例</button>
@@ -576,46 +579,6 @@ document.querySelector('#app').innerHTML = `
         <div class="view-save-actions">
           <button class="secondary" id="cancelSaveView">取消</button>
           <button class="primary" id="confirmSaveView">保存</button>
-        </div>
-      </div>
-    </div>
-
-    <div class="noise-map-overlay hidden" id="noiseMapOverlay">
-      <div class="noise-map-panel">
-        <div class="noise-map-header">
-          <h2>噪声态势地图</h2>
-          <div class="noise-map-header-info" id="noiseMapHeaderInfo"></div>
-          <button class="noise-map-close" id="noiseMapClose">&times;</button>
-        </div>
-        <div class="noise-map-body">
-          <div class="noise-map-canvas-wrap">
-            <svg id="noiseMapSvg" class="noise-map-svg" viewBox="0 0 800 560"></svg>
-          </div>
-          <div class="noise-map-legend" id="noiseMapLegend"></div>
-        </div>
-        <div class="noise-map-detail hidden" id="noiseMapDetail">
-          <div class="noise-map-detail-header">
-            <h3 id="noiseMapDetailTitle">点位详情</h3>
-            <button class="noise-map-detail-close" id="noiseMapDetailClose">&times;</button>
-          </div>
-          <div class="noise-map-detail-stats" id="noiseMapDetailStats"></div>
-          <div class="noise-map-detail-chart">
-            <h4>日内分贝曲线</h4>
-            <div class="chart" id="noiseMapDetailChart"></div>
-          </div>
-          <div class="noise-map-detail-records">
-            <h4>最近记录</h4>
-            <div class="tableWrap">
-              <table>
-                <thead><tr><th>时间</th><th>分贝</th><th>来源</th><th>感受</th></tr></thead>
-                <tbody id="noiseMapDetailRows"></tbody>
-              </table>
-            </div>
-          </div>
-          <div class="noise-map-detail-alarms">
-            <h4>相关告警</h4>
-            <div id="noiseMapDetailAlarms"></div>
-          </div>
         </div>
       </div>
     </div>
@@ -2150,12 +2113,6 @@ document.addEventListener('keydown', (e) => {
       closeMonitoringPointPanel();
     } else if (!document.querySelector('#thresholdOverlay').classList.contains('hidden')) {
       closeThresholdPanel();
-    } else if (!document.querySelector('#noiseMapOverlay').classList.contains('hidden')) {
-      if (!document.querySelector('#noiseMapDetail').classList.contains('hidden')) {
-        closeMapDetail();
-      } else {
-        closeNoiseMap();
-      }
     } else if (!document.querySelector('#locationDetailOverlay').classList.contains('hidden')) {
       closeLocationDetail();
     }
@@ -2654,397 +2611,6 @@ function confirmImport() {
   alert(`成功导入${importData.validRecords.length}条记录`);
 }
 
-let selectedMapPointId = null;
-let mapFilteredRecords = [];
-
-function projectCoordinates(points) {
-  const validPoints = points.filter(p =>
-    p.latitude !== undefined && p.latitude !== null &&
-    p.longitude !== undefined && p.longitude !== null &&
-    !isNaN(p.latitude) && !isNaN(p.longitude)
-  );
-  if (validPoints.length === 0) return new Map();
-  const lats = validPoints.map(p => p.latitude);
-  const lngs = validPoints.map(p => p.longitude);
-  const minLat = Math.min(...lats);
-  const maxLat = Math.max(...lats);
-  const minLng = Math.min(...lngs);
-  const maxLng = Math.max(...lngs);
-  const padding = 0.0008;
-  const latSpan = Math.max(maxLat - minLat, padding * 2);
-  const lngSpan = Math.max(maxLng - minLng, padding * 2);
-  const svgWidth = 800;
-  const svgHeight = 560;
-  const marginX = 70;
-  const marginY = 60;
-  const plotW = svgWidth - marginX * 2;
-  const plotH = svgHeight - marginY * 2;
-  const projection = new Map();
-  points.forEach(point => {
-    const isValid = validPoints.some(vp => vp.id === point.id);
-    if (!isValid) {
-      projection.set(point.id, { x: -999, y: -999, valid: false });
-      return;
-    }
-    const x = marginX + ((point.longitude - (minLng - padding)) / (lngSpan + padding * 2)) * plotW;
-    const y = svgHeight - marginY - ((point.latitude - (minLat - padding)) / (latSpan + padding * 2)) * plotH;
-    projection.set(point.id, { x, y, valid: true, minLat, maxLat, minLng, maxLng });
-  });
-  return projection;
-}
-
-function getMapFilteredRecords() {
-  let filtered = records.filter((record) =>
-    [record.location, record.source, record.feeling].join(' ').includes(search.value.trim())
-  );
-  if (selectedMonitoringPointFilter) {
-    filtered = filtered.filter(record => record.monitoringPointId === selectedMonitoringPointFilter);
-  }
-  return applyFilters(filtered);
-}
-
-function computePointStats(pointId, pointName, filteredRecords) {
-  const pointRecords = filteredRecords.filter(r =>
-    (r.monitoringPointId && r.monitoringPointId === pointId) ||
-    (!r.monitoringPointId && r.location === pointName)
-  );
-  const allRecords = records.filter(r =>
-    (r.monitoringPointId && r.monitoringPointId === pointId) ||
-    (!r.monitoringPointId && r.location === pointName)
-  );
-  const dbs = pointRecords.map(r => r.db);
-  const avgDb = dbs.length ? average(dbs) : 0;
-  const maxDb = dbs.length ? Math.max(...dbs) : 0;
-  const pendingAlarms = alarms.filter(a => a.status === 'pending' && a.location === pointName);
-  const confirmedAlarms = alarms.filter(a => a.status === 'confirmed' && a.location === pointName);
-  let highestAlarmLevel = 0;
-  [...pendingAlarms, ...confirmedAlarms].forEach(a => {
-    let level = 1;
-    if (a.type === 'multiple') level = 3;
-    else if (a.type === 'single') level = 4;
-    else if (a.type === 'nighttime') level = 2;
-    if (pendingAlarms.some(pa => pa.id === a.id)) level += 1;
-    highestAlarmLevel = Math.max(highestAlarmLevel, level);
-  });
-  return {
-    totalCount: allRecords.length,
-    filteredCount: pointRecords.length,
-    avgDb,
-    maxDb,
-    pendingAlarms: pendingAlarms.length,
-    confirmedAlarms: confirmedAlarms.length,
-    highestAlarmLevel,
-    records: pointRecords,
-    allRecords
-  };
-}
-
-function getPointDisplayColor(avgDb, highestAlarmLevel) {
-  if (highestAlarmLevel >= 4) return '#d94636';
-  if (highestAlarmLevel >= 3) return '#ea580c';
-  if (highestAlarmLevel >= 2) return '#f97316';
-  return getNoiseColor(avgDb);
-}
-
-function renderNoiseMap() {
-  mapFilteredRecords = getMapFilteredRecords();
-  const projection = projectCoordinates(monitoringPoints);
-  const svg = document.querySelector('#noiseMapSvg');
-  const legendEl = document.querySelector('#noiseMapLegend');
-  const headerInfo = document.querySelector('#noiseMapHeaderInfo');
-
-  const pointsWithCoords = monitoringPoints.filter(p => projection.get(p.id)?.valid);
-  const pointsWithoutCoords = monitoringPoints.filter(p => !projection.get(p.id)?.valid);
-
-  const totalPendingAlarms = alarms.filter(a => a.status === 'pending').length;
-  headerInfo.innerHTML = `
-    <div class="map-header-stats">
-      <span>监测点：<strong>${monitoringPoints.length}</strong></span>
-      <span>有坐标：<strong>${pointsWithCoords.length}</strong></span>
-      <span>待处理告警：<strong style="color:${totalPendingAlarms > 0 ? '#d94636' : '#22c55e'}">${totalPendingAlarms}</strong></span>
-      <span>当前筛选记录：<strong>${mapFilteredRecords.length}</strong></span>
-    </div>
-  `;
-
-  if (pointsWithCoords.length === 0) {
-    svg.innerHTML = `
-      <rect x="0" y="0" width="800" height="560" fill="#fdf8f2" rx="8"/>
-      <text x="400" y="260" text-anchor="middle" fill="#999" font-size="16">暂无带有经纬度坐标的监测点</text>
-      <text x="400" y="290" text-anchor="middle" fill="#bbb" font-size="13">请在「监测点管理」中为监测点添加经纬度坐标</text>
-    `;
-    legendEl.innerHTML = '';
-    return;
-  }
-
-  const projData = projection.get(pointsWithCoords[0].id);
-  const { minLat, maxLat, minLng, maxLng } = projData;
-
-  const gridLines = [];
-  const latSteps = 4;
-  const lngSteps = 5;
-  for (let i = 0; i <= latSteps; i++) {
-    const lat = minLat + (maxLat - minLat) * (i / latSteps);
-    const y = 560 - 60 - ((lat - minLat) / (maxLat - minLat || 1)) * (560 - 120);
-    gridLines.push(`<line x1="70" y1="${y}" x2="730" y2="${y}" stroke="#eaddcf" stroke-width="1" stroke-dasharray="2,3"/>`);
-    gridLines.push(`<text x="62" y="${y + 4}" text-anchor="end" fill="#b09d8c" font-size="10">${lat.toFixed(4)}°N</text>`);
-  }
-  for (let i = 0; i <= lngSteps; i++) {
-    const lng = minLng + (maxLng - minLng) * (i / lngSteps);
-    const x = 70 + ((lng - minLng) / (maxLng - minLng || 1)) * (800 - 140);
-    gridLines.push(`<line x1="${x}" y1="60" x2="${x}" y2="500" stroke="#eaddcf" stroke-width="1" stroke-dasharray="2,3"/>`);
-    gridLines.push(`<text x="${x}" y="530" text-anchor="middle" fill="#b09d8c" font-size="10">${lng.toFixed(4)}°E</text>`);
-  }
-
-  let svgContent = `
-    <rect x="0" y="0" width="800" height="560" fill="#fdf8f2" rx="8"/>
-    <rect x="70" y="60" width="660" height="440" fill="#fffaf3" stroke="#eadfce" stroke-width="1" rx="4"/>
-    ${gridLines.join('')}
-    <text x="400" y="30" text-anchor="middle" fill="#79695e" font-size="13" font-weight="600">
-      城区噪声监测点位分布 · 坐标投影
-    </text>
-    <text x="70" y="552" fill="#b09d8c" font-size="11">→ 经度递增</text>
-    <text x="58" y="68" fill="#b09d8c" font-size="11" transform="rotate(-90, 58, 68)">→ 纬度递增</text>
-  `;
-
-  monitoringPoints.forEach(point => {
-    const proj = projection.get(point.id);
-    if (!proj || !proj.valid) return;
-
-    const stats = computePointStats(point.id, point.name, mapFilteredRecords);
-    const typeInfo = getPointTypeInfo(point.type);
-    const color = stats.filteredCount > 0
-      ? getPointDisplayColor(stats.avgDb, stats.highestAlarmLevel)
-      : '#c9bfb0';
-
-    const hasRecords = stats.filteredCount > 0;
-    const hasPendingAlarms = stats.pendingAlarms > 0;
-    const isSelected = selectedMapPointId === point.id;
-    const radius = 14;
-
-    svgContent += `
-      <g class="map-point" data-point-id="${point.id}" style="cursor: pointer;">
-        ${hasPendingAlarms ? `<circle cx="${proj.x}" cy="${proj.y}" r="${radius + 8}" fill="none" stroke="#d94636" stroke-width="2" stroke-dasharray="3,2" opacity="0.7"><animate attributeName="r" values="${radius + 6};${radius + 12};${radius + 6}" dur="2s" repeatCount="indefinite"/></circle>` : ''}
-        ${isSelected ? `<circle cx="${proj.x}" cy="${proj.y}" r="${radius + 5}" fill="none" stroke="#251e1a" stroke-width="2.5"/>` : ''}
-        <circle cx="${proj.x}" cy="${proj.y}" r="${radius}" fill="${color}" stroke="white" stroke-width="3" opacity="${hasRecords ? 1 : 0.55}"/>
-        <text x="${proj.x}" y="${proj.y + 4}" text-anchor="middle" fill="white" font-size="11" font-weight="700">
-          ${stats.filteredCount > 0 ? Math.round(stats.avgDb) : '—'}
-        </text>
-        <text x="${proj.x}" y="${proj.y - radius - 14}" text-anchor="middle" fill="#4a3e34" font-size="11" font-weight="600">
-          ${point.name}
-        </text>
-        <rect x="${proj.x - 30}" y="${proj.y - radius - 30}" width="60" height="14" rx="3" fill="${color}" opacity="0.85"/>
-        <text x="${proj.x}" y="${proj.y - radius - 20}" text-anchor="middle" fill="white" font-size="9" font-weight="600">
-          ${typeInfo.label}
-        </text>
-      </g>
-    `;
-  });
-
-  if (pointsWithoutCoords.length > 0) {
-    svgContent += `
-      <g>
-        <text x="400" y="542" text-anchor="middle" fill="#b45309" font-size="11">
-          ⚠ 有 ${pointsWithoutCoords.length} 个监测点缺少坐标，未在地图上显示
-          (${pointsWithoutCoords.map(p => p.name).join('、')})
-        </text>
-      </g>
-    `;
-  }
-
-  svg.innerHTML = svgContent;
-
-  svg.querySelectorAll('.map-point').forEach(g => {
-    g.addEventListener('click', () => openMapPointDetail(g.dataset.pointId));
-  });
-
-  legendEl.innerHTML = renderMapLegend();
-}
-
-function renderMapLegend() {
-  return `
-    <div class="map-legend-title">图例说明</div>
-    <div class="map-legend-grid">
-      <div class="legend-section">
-        <div class="legend-section-title">噪声等级</div>
-        <div class="legend-item"><span class="legend-dot" style="background:#22c55e"></span>安静 (0-${thresholds.lowReference}dB)</div>
-        <div class="legend-item"><span class="legend-dot" style="background:#eab308"></span>正常 (${thresholds.lowReference}-${thresholds.highNoise}dB)</div>
-        <div class="legend-item"><span class="legend-dot" style="background:#f97316"></span>高噪声 (${thresholds.highNoise}-${thresholds.harsh}dB)</div>
-        <div class="legend-item"><span class="legend-dot" style="background:#d94636"></span>刺耳 (${thresholds.harsh}dB+)</div>
-        <div class="legend-item"><span class="legend-dot" style="background:#c9bfb0;opacity:0.55"></span>暂无筛选后记录</div>
-      </div>
-      <div class="legend-section">
-        <div class="legend-section-title">告警状态</div>
-        <div class="legend-item"><span class="legend-ring-pulse">◉</span>虚线光环：有待处理告警</div>
-        <div class="legend-item"><span class="legend-ring-select">◎</span>粗边框：当前选中点位</div>
-        <div class="legend-section-title" style="margin-top:10px">告警等级影响</div>
-        <div class="legend-item"><span class="legend-dot" style="background:#ea580c"></span>多次超标告警</div>
-        <div class="legend-item"><span class="legend-dot" style="background:#d94636"></span>单条超阈值告警</div>
-      </div>
-      <div class="legend-section">
-        <div class="legend-section-title">点位类型</div>
-        ${pointTypes.map(t => `<div class="legend-item"><span class="legend-type-badge ${t.colorClass}">${t.label}</span></div>`).join('')}
-      </div>
-    </div>
-  `;
-}
-
-function openMapPointDetail(pointId) {
-  const point = getMonitoringPointById(pointId);
-  if (!point) return;
-
-  selectedMapPointId = pointId;
-  const detailEl = document.querySelector('#noiseMapDetail');
-  const stats = computePointStats(point.id, point.name, mapFilteredRecords);
-  const typeInfo = getPointTypeInfo(point.type);
-  const color = stats.filteredCount > 0
-    ? getPointDisplayColor(stats.avgDb, stats.highestAlarmLevel)
-    : '#c9bfb0';
-
-  document.querySelector('#noiseMapDetailTitle').innerHTML = `
-    <span style="display:inline-flex;align-items:center;gap:8px;">
-      <span class="point-type-badge ${typeInfo.colorClass}">${typeInfo.label}</span>
-      ${point.name}
-    </span>
-  `;
-
-  const hasFilteredRecords = stats.filteredCount > 0;
-  const hasAnyRecords = stats.totalCount > 0;
-  const today = new Date().toISOString().slice(0, 10);
-  const dayRecords = stats.allRecords
-    .filter(r => r.at.startsWith(today))
-    .sort((a, b) => a.at.localeCompare(b.at));
-  const recentRecords = stats.allRecords
-    .slice()
-    .sort((a, b) => b.at.localeCompare(a.at))
-    .slice(0, 10);
-  const relatedAlarms = alarms
-    .filter(a => a.location === point.name)
-    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-
-  let extraEmptyInfo = '';
-  if (!hasFilteredRecords && hasAnyRecords) {
-    extraEmptyInfo = `<div class="map-detail-empty-note">※ 当前筛选条件下无匹配记录，下方展示该点位全部历史数据（共 ${stats.totalCount} 条）</div>`;
-  } else if (!hasAnyRecords) {
-    extraEmptyInfo = `<div class="map-detail-empty-note">※ 该监测点暂无任何观测记录</div>`;
-  }
-
-  document.querySelector('#noiseMapDetailStats').innerHTML = `
-    ${extraEmptyInfo}
-    <div class="stat-grid">
-      <div class="stat-card">
-        <span class="stat-label">筛选后记录</span>
-        <strong class="stat-value">${stats.filteredCount}${hasAnyRecords ? `<span class="stat-sub">/ 共 ${stats.totalCount}</span>` : ''}</strong>
-      </div>
-      <div class="stat-card">
-        <span class="stat-label">平均分贝</span>
-        <strong class="stat-value" style="color:${color};">
-          ${hasFilteredRecords ? `${stats.avgDb.toFixed(1)}dB` : '—'}
-        </strong>
-      </div>
-      <div class="stat-card">
-        <span class="stat-label">最高分贝</span>
-        <strong class="stat-value" style="color:${hasFilteredRecords ? getNoiseColor(stats.maxDb) : '#999'}">
-          ${hasFilteredRecords ? `${stats.maxDb}dB` : '—'}
-        </strong>
-      </div>
-      <div class="stat-card">
-        <span class="stat-label">告警数量</span>
-        <strong class="stat-value">
-          <span style="color:${stats.pendingAlarms > 0 ? '#d94636' : '#22c55e'}">待处理 ${stats.pendingAlarms}</span>
-          <span class="stat-sub">/ 已确认 ${stats.confirmedAlarms}</span>
-        </strong>
-      </div>
-      <div class="stat-card">
-        <span class="stat-label">街区</span>
-        <strong class="stat-value">${point.district || '—'}</strong>
-      </div>
-      <div class="stat-card">
-        <span class="stat-label">坐标</span>
-        <strong class="stat-value" style="font-size:13px;">${point.latitude?.toFixed(4)}, ${point.longitude?.toFixed(4)}</strong>
-      </div>
-    </div>
-    ${point.notes ? `<div class="point-notes-block">📝 ${point.notes}</div>` : ''}
-  `;
-
-  const chartData = dayRecords.length > 0
-    ? dayRecords.map(r => ({ label: r.at.slice(11, 16), value: r.db }))
-    : recentRecords.slice(0, 12).reverse().map(r => ({ label: r.at.slice(5, 16).replace('T', ' '), value: r.db }));
-  drawLine('#noiseMapDetailChart', chartData, 'dB');
-
-  const chartEl = document.querySelector('#noiseMapDetailChart');
-  if (!chartData.length) {
-    chartEl.innerHTML = '<p class="empty">该点位暂无数据可绘制曲线</p>';
-  } else if (!dayRecords.length) {
-    chartEl.innerHTML += `<p class="empty" style="margin-top:8px;font-size:12px;color:#999;">※ 今日无记录，上方展示最近 ${Math.min(recentRecords.length, 12)} 条历史</p>`;
-  }
-
-  document.querySelector('#noiseMapDetailRows').innerHTML = recentRecords.length
-    ? recentRecords.map(record => {
-        const level = getNoiseLevel(record.db);
-        const matchesFilter = mapFilteredRecords.some(r => r.id === record.id);
-        return `<tr class="${matchesFilter ? '' : 'not-in-filter'}">
-          <td>${record.at.replace('T', ' ')}</td>
-          <td><span class="db-badge noise-level-${level}">${record.db}dB</span></td>
-          <td>${record.source}</td>
-          <td>${record.feeling}</td>
-        </tr>`;
-      }).join('')
-    : '<tr><td colspan="4" style="text-align:center;padding:24px;color:#999;">暂无记录</td></tr>';
-
-  const alarmsEl = document.querySelector('#noiseMapDetailAlarms');
-  if (!relatedAlarms.length) {
-    alarmsEl.innerHTML = '<p class="empty" style="margin:0;">该点位暂无告警记录</p>';
-  } else {
-    alarmsEl.innerHTML = relatedAlarms.slice(0, 8).map(alarm => {
-      const statusLabel = { pending: '待处理', confirmed: '已确认', ignored: '已忽略' }[alarm.status];
-      const statusClass = `alarm-status-${alarm.status}`;
-      return `
-        <div class="map-alarm-item ${statusClass} alarm-type-${alarm.type}">
-          <div class="map-alarm-head">
-            <span class="alarm-type-badge">${alarm.typeLabel}</span>
-            <span class="alarm-status-badge ${statusClass}">${statusLabel}</span>
-            <strong class="alarm-db-mini">${alarm.db || alarm.maxDb}dB</strong>
-          </div>
-          <div class="map-alarm-msg">${alarm.message}</div>
-          <div class="map-alarm-time">${new Date(alarm.createdAt).toLocaleString('zh-CN')}</div>
-        </div>
-      `;
-    }).join('') + (relatedAlarms.length > 8 ? `<p class="empty" style="margin:8px 0 0;">... 还有 ${relatedAlarms.length - 8} 条告警</p>` : '');
-  }
-
-  detailEl.classList.remove('hidden');
-  detailEl.scrollTop = 0;
-  renderNoiseMap();
-}
-
-function openNoiseMap() {
-  document.querySelector('#noiseMapOverlay').classList.remove('hidden');
-  document.querySelector('#noiseMapDetail').classList.add('hidden');
-  document.body.style.overflow = 'hidden';
-  selectedMapPointId = null;
-  renderNoiseMap();
-}
-
-function closeNoiseMap() {
-  document.querySelector('#noiseMapOverlay').classList.add('hidden');
-  document.querySelector('#noiseMapDetail').classList.add('hidden');
-  document.body.style.overflow = '';
-  selectedMapPointId = null;
-}
-
-function closeMapDetail() {
-  document.querySelector('#noiseMapDetail').classList.add('hidden');
-  selectedMapPointId = null;
-  renderNoiseMap();
-}
-
-document.querySelector('#noiseMapBtn').addEventListener('click', openNoiseMap);
-document.querySelector('#noiseMapClose').addEventListener('click', closeNoiseMap);
-document.querySelector('#noiseMapOverlay').addEventListener('click', (e) => {
-  if (e.target.id === 'noiseMapOverlay') closeNoiseMap();
-});
-document.querySelector('#noiseMapDetailClose').addEventListener('click', closeMapDetail);
-
 const patrolTaskForm = document.querySelector('#patrolTaskForm');
 
 document.querySelector('#patrolTasksBtn').addEventListener('click', openPatrolTasks);
@@ -3137,7 +2703,7 @@ function createPatrolFromRecord(record) {
 
   const now = new Date();
   now.setHours(now.getHours() + 2);
-  const defaultTime = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+  const defaultTime = toLocalDateTimeInputValue(now);
   document.querySelector('#patrolScheduledAt').value = defaultTime;
 
   const avgDb = Math.round(record.db);
@@ -3168,9 +2734,10 @@ function handlePatrolFormSubmit(event) {
     return;
   }
 
-  const now = new Date().toISOString();
+  const now = new Date();
+  const nowIso = now.toISOString();
   const completedAt = data.status === 'completed' && !data.completedAt
-    ? new Date().toISOString().slice(0, 16)
+    ? toLocalDateTimeInputValue(now)
     : (data.completedAt || null);
 
   const task = {
@@ -3182,8 +2749,8 @@ function handlePatrolFormSubmit(event) {
     status: data.status || 'pending',
     completedAt,
     notes: data.notes || '',
-    createdAt: editingPatrolTaskId ? (patrolTasks.find(t => t.id === editingPatrolTaskId)?.createdAt || now) : now,
-    updatedAt: now
+    createdAt: editingPatrolTaskId ? (patrolTasks.find(t => t.id === editingPatrolTaskId)?.createdAt || nowIso) : nowIso,
+    updatedAt: nowIso
   };
 
   if (editingPatrolTaskId) {
@@ -3199,13 +2766,14 @@ function handlePatrolFormSubmit(event) {
 }
 
 function updatePatrolTaskStatus(taskId, newStatus) {
-  const now = new Date().toISOString();
+  const now = new Date();
+  const nowIso = now.toISOString();
   patrolTasks = patrolTasks.map(t => {
     if (t.id === taskId) {
       const completedAt = newStatus === 'completed' && !t.completedAt
-        ? now.slice(0, 16)
+        ? toLocalDateTimeInputValue(now)
         : (newStatus !== 'completed' ? null : t.completedAt);
-      return { ...t, status: newStatus, completedAt, updatedAt: now };
+      return { ...t, status: newStatus, completedAt, updatedAt: nowIso };
     }
     return t;
   });
@@ -3351,17 +2919,6 @@ document.addEventListener('keydown', (e) => {
     }
   }
 });
-
-const _originalRender = render;
-render = function () {
-  _originalRender();
-  if (!document.querySelector('#noiseMapOverlay').classList.contains('hidden')) {
-    renderNoiseMap();
-    if (selectedMapPointId) {
-      openMapPointDetail(selectedMapPointId);
-    }
-  }
-};
 
 recalculateAlarms();
 render();
