@@ -2022,20 +2022,20 @@ function drawBars(selector, data, unit) {
   });
 }
 
-function openLocationDetail(location) {
+function openLocationDetail(location, pointId = null) {
   const locationRecords = records
-    .filter((record) => record.location === location)
+    .filter((record) => record.location === location || (pointId && record.monitoringPointId === pointId))
     .sort((a, b) => a.at.localeCompare(b.at));
 
-  if (!locationRecords.length) return;
+  const point = pointId ? getMonitoringPointById(pointId)
+    : (locationRecords[0]?.monitoringPointId ? getMonitoringPointById(locationRecords[0].monitoringPointId) : null);
 
-  const firstRecord = locationRecords[0];
-  const point = firstRecord.monitoringPointId ? getMonitoringPointById(firstRecord.monitoringPointId) : null;
+  const displayName = point ? point.name : location;
 
-  const stats = calculateLocationStats(locationRecords);
-  const mainSource = getMainSource(locationRecords.map((r) => r.source));
+  const stats = locationRecords.length ? calculateLocationStats(locationRecords) : null;
+  const mainSource = locationRecords.length ? getMainSource(locationRecords.map((r) => r.source)) : null;
 
-  let title = `${location} · 噪声详情`;
+  let title = `${displayName} · 噪声详情`;
   if (point) {
     const typeInfo = getPointTypeInfo(point.type);
     title = `${point.name} · ${typeInfo.label} · 噪声详情`;
@@ -2058,46 +2058,85 @@ function openLocationDetail(location) {
         <span class="stat-label">坐标</span>
         <strong class="stat-value" style="font-size:14px;">${point.latitude.toFixed(4)}, ${point.longitude.toFixed(4)}</strong>
       </div>
+      ${point.notes ? `
+      <div class="stat-card">
+        <span class="stat-label">备注</span>
+        <strong class="stat-value" style="font-size:13px;">${escapeHtml(point.notes)}</strong>
+      </div>` : ''}
     `;
   }
 
-  document.querySelector('#locationDetailStats').innerHTML = `
-    <div class="stat-card">
-      <span class="stat-label">观测次数</span>
-      <strong class="stat-value">${stats.count}</strong>
-    </div>
-    <div class="stat-card">
-      <span class="stat-label">平均分贝</span>
-      <strong class="stat-value">${stats.avgDb.toFixed(1)}dB</strong>
-    </div>
-    <div class="stat-card">
-      <span class="stat-label">最高分贝</span>
-      <strong class="stat-value">${stats.maxDb}dB</strong>
-    </div>
-    <div class="stat-card">
-      <span class="stat-label">主要噪声来源</span>
-      <strong class="stat-value">${mainSource}</strong>
-    </div>
-    ${extraStats}
-  `;
+  if (locationRecords.length) {
+    document.querySelector('#locationDetailStats').innerHTML = `
+      <div class="stat-card">
+        <span class="stat-label">观测次数</span>
+        <strong class="stat-value">${stats.count}</strong>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">平均分贝</span>
+        <strong class="stat-value">${stats.avgDb.toFixed(1)}dB</strong>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">最高分贝</span>
+        <strong class="stat-value">${stats.maxDb}dB</strong>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">主要噪声来源</span>
+        <strong class="stat-value">${mainSource}</strong>
+      </div>
+      ${extraStats}
+    `;
 
-  const chartData = locationRecords.map((record) => ({
-    label: record.at.slice(5, 16).replace('T', ' '),
-    value: record.db
-  }));
-  drawLine('#locationDetailChart', chartData, 'dB');
+    const chartData = locationRecords.map((record) => ({
+      label: record.at.slice(5, 16).replace('T', ' '),
+      value: record.db
+    }));
+    drawLine('#locationDetailChart', chartData, 'dB');
 
-  document.querySelector('#locationDetailRows').innerHTML = locationRecords
-    .slice()
-    .reverse()
-    .map((record) => `
+    document.querySelector('#locationDetailRows').innerHTML = locationRecords
+      .slice()
+      .reverse()
+      .map((record) => `
+        <tr>
+          <td>${record.at.replace('T', ' ')}</td>
+          <td>${record.db}dB</td>
+          <td>${record.source}</td>
+          <td>${record.feeling}</td>
+        </tr>
+      `).join('');
+  } else {
+    document.querySelector('#locationDetailStats').innerHTML = `
+      <div class="stat-card">
+        <span class="stat-label">观测次数</span>
+        <strong class="stat-value">0</strong>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">数据状态</span>
+        <strong class="stat-value" style="color:#ef4444;">暂无观测记录</strong>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">提示</span>
+        <strong class="stat-value" style="font-size:13px;">请尽快前往该点位进行噪声采集</strong>
+      </div>
+      ${extraStats}
+    `;
+
+    document.querySelector('#locationDetailChart').innerHTML = `
+      <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:220px;color:#79695e;">
+        <p style="font-size:48px;margin:0 0 12px 0;">📭</p>
+        <p style="margin:0;">该点位暂无历史观测记录</p>
+      </div>
+    `;
+
+    document.querySelector('#locationDetailRows').innerHTML = `
       <tr>
-        <td>${record.at.replace('T', ' ')}</td>
-        <td>${record.db}dB</td>
-        <td>${record.source}</td>
-        <td>${record.feeling}</td>
+        <td colspan="4" style="text-align:center;padding:40px 16px;color:#79695e;">
+          <p style="font-size:24px;margin:0 0 8px 0;">🔇</p>
+          <p style="margin:0;">暂无历史记录</p>
+        </td>
       </tr>
-    `).join('');
+    `;
+  }
 
   document.querySelector('#locationDetailOverlay').classList.remove('hidden');
   document.body.style.overflow = 'hidden';
@@ -3484,7 +3523,7 @@ function renderHealthDashboard() {
       const point = getMonitoringPointById(pointId);
       if (point) {
         closeHealthDashboard();
-        openLocationDetail(point.name);
+        openLocationDetail(point.name, pointId);
       }
     });
   });
