@@ -9,6 +9,7 @@ const filterViewsKey = 'hxwl-11-filter-views';
 const defaultViewKey = 'hxwl-11-default-view';
 const patrolTasksKey = 'hxwl-11-patrol-tasks';
 const complaintsKey = 'hxwl-11-noise-complaints';
+const importBatchesKey = 'hxwl-11-import-batches';
 
 const complaintStatusLabels = {
   pending: '待处理',
@@ -105,6 +106,8 @@ let editingComplaintId = null;
 let complaintStatusFilter = 'all';
 let complaintLocationFilter = '';
 
+let importBatches = JSON.parse(localStorage.getItem(importBatchesKey) || 'null') || [];
+
 function savePatrolTasks() {
   localStorage.setItem(patrolTasksKey, JSON.stringify(patrolTasks));
 }
@@ -156,6 +159,7 @@ document.querySelector('#app').innerHTML = `
         <button id="healthDashboardBtn">健康看板</button>
         <button id="alarmCenterBtn">告警中心</button>
         <button id="monitoringPointsBtn">监测点管理</button>
+        <button id="importBatchesBtn">导入记录</button>
         <button id="thresholdBtn">阈值设置</button>
         <button id="reportBtn">生成报告</button>
         <button id="reset">载入示例</button>
@@ -879,6 +883,39 @@ document.querySelector('#app').innerHTML = `
       </div>
     </div>
 
+    <div class="import-batches-overlay hidden" id="importBatchesOverlay">
+      <div class="import-batches-panel">
+        <div class="import-batches-header">
+          <h2>导入记录管理</h2>
+          <button class="import-batches-close" id="importBatchesClose">&times;</button>
+        </div>
+        <div class="import-batches-content">
+          <div class="import-batches-summary">
+            <div class="import-batches-stat-card total">
+              <span class="import-batches-stat-label">总导入批次</span>
+              <strong class="import-batches-stat-value" id="importBatchesTotalCount">0</strong>
+            </div>
+            <div class="import-batches-stat-card active">
+              <span class="import-batches-stat-label">有效批次</span>
+              <strong class="import-batches-stat-value" id="importBatchesActiveCount">0</strong>
+            </div>
+            <div class="import-batches-stat-card reverted">
+              <span class="import-batches-stat-label">已撤销</span>
+              <strong class="import-batches-stat-value" id="importBatchesRevertedCount">0</strong>
+            </div>
+            <div class="import-batches-stat-card records">
+              <span class="import-batches-stat-label">累计导入记录</span>
+              <strong class="import-batches-stat-value" id="importBatchesTotalRecords">0</strong>
+            </div>
+          </div>
+          <div class="import-batches-list-section">
+            <h3>最近导入批次</h3>
+            <div id="importBatchesList" class="import-batches-list"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div class="confirm-overlay hidden" id="confirmOverlay">
       <div class="confirm-panel">
         <div class="confirm-header">
@@ -1131,6 +1168,12 @@ document.querySelector('#monitoringPointOverlay').addEventListener('click', (e) 
   if (e.target.id === 'monitoringPointOverlay') closeMonitoringPointPanel();
 });
 
+document.querySelector('#importBatchesBtn').addEventListener('click', openImportBatches);
+document.querySelector('#importBatchesClose').addEventListener('click', closeImportBatches);
+document.querySelector('#importBatchesOverlay').addEventListener('click', (e) => {
+  if (e.target.id === 'importBatchesOverlay') closeImportBatches();
+});
+
 document.querySelector('#cancelPointEdit').addEventListener('click', () => {
   editingPointId = null;
   monitoringPointForm.reset();
@@ -1164,8 +1207,10 @@ document.querySelector('#reset').addEventListener('click', () => {
   records = seed;
   monitoringPoints = defaultMonitoringPoints;
   complaints = defaultComplaints;
+  importBatches = [];
   migrateData();
   saveComplaints();
+  saveImportBatches();
   recalculateAlarms();
   updateMonitoringPointSelects();
   render();
@@ -1265,6 +1310,10 @@ function saveAlarmConfig() {
 
 function saveFilterViews() {
   localStorage.setItem(filterViewsKey, JSON.stringify(filterViews));
+}
+
+function saveImportBatches() {
+  localStorage.setItem(importBatchesKey, JSON.stringify(importBatches));
 }
 
 function getUniqueLocations() {
@@ -2551,6 +2600,129 @@ function closeAlarmCenter() {
   document.body.style.overflow = '';
 }
 
+function openImportBatches() {
+  document.querySelector('#importBatchesOverlay').classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+  renderImportBatches();
+}
+
+function closeImportBatches() {
+  document.querySelector('#importBatchesOverlay').classList.add('hidden');
+  document.body.style.overflow = '';
+}
+
+function formatDateTime(isoString) {
+  const date = new Date(isoString);
+  return date.toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  });
+}
+
+function revertImportBatch(batchId) {
+  const batch = importBatches.find(b => b.id === batchId);
+  if (!batch || batch.status === 'reverted') return;
+
+  const recordIdSet = new Set(batch.recordIds);
+  records = records.filter(r => !recordIdSet.has(r.id));
+
+  batch.status = 'reverted';
+  batch.revertedAt = new Date().toISOString();
+  saveImportBatches();
+  save();
+  recalculateAlarms();
+  renderImportBatches();
+  render();
+}
+
+function renderImportBatches() {
+  const totalCount = importBatches.length;
+  const activeCount = importBatches.filter(b => b.status === 'active').length;
+  const revertedCount = importBatches.filter(b => b.status === 'reverted').length;
+  const totalRecords = importBatches
+    .filter(b => b.status === 'active')
+    .reduce((sum, b) => sum + b.successCount, 0);
+
+  document.querySelector('#importBatchesTotalCount').textContent = totalCount;
+  document.querySelector('#importBatchesActiveCount').textContent = activeCount;
+  document.querySelector('#importBatchesRevertedCount').textContent = revertedCount;
+  document.querySelector('#importBatchesTotalRecords').textContent = totalRecords;
+
+  const listEl = document.querySelector('#importBatchesList');
+  if (!importBatches.length) {
+    listEl.innerHTML = '<p class="empty">暂无导入记录</p>';
+    return;
+  }
+
+  listEl.innerHTML = importBatches.map(batch => {
+    const isReverted = batch.status === 'reverted';
+    return `
+      <div class="import-batch-item ${isReverted ? 'reverted' : ''}">
+        <div class="import-batch-header">
+          <div class="import-batch-title">
+            <span class="import-batch-file-icon">📄</span>
+            <span class="import-batch-filename">${escapeHtml(batch.fileName)}</span>
+            <span class="import-batch-status ${isReverted ? 'status-reverted' : 'status-active'}">
+              ${isReverted ? '已撤销' : '已生效'}
+            </span>
+          </div>
+          <div class="import-batch-time">${formatDateTime(batch.importTime)}</div>
+        </div>
+        <div class="import-batch-stats">
+          <span class="import-batch-stat"><strong>${batch.successCount}</strong> 成功</span>
+          <span class="import-batch-stat"><strong>${batch.errorCount}</strong> 错误</span>
+          ${batch.skippedCount > 0 ? `<span class="import-batch-stat"><strong>${batch.skippedCount}</strong> 跳过</span>` : ''}
+          <span class="import-batch-stat"><strong>${batch.recordIds.length}</strong> 条记录ID</span>
+        </div>
+        ${isReverted && batch.revertedAt ? `
+          <div class="import-batch-reverted-info">
+            撤销时间：${formatDateTime(batch.revertedAt)}
+          </div>
+        ` : ''}
+        <div class="import-batch-actions">
+          <button class="secondary" data-view-batch="${batch.id}" ${isReverted ? 'disabled' : ''}>查看记录ID</button>
+          ${!isReverted ? `
+            <button class="danger" data-revert-batch="${batch.id}">撤销导入</button>
+          ` : ''}
+        </div>
+        <div class="import-batch-record-ids hidden" id="recordIds-${batch.id}">
+          <div class="record-ids-header">关联记录ID：</div>
+          <div class="record-ids-list">${batch.recordIds.map(id => `<span class="record-id-tag">${id.slice(0, 8)}...</span>`).join('')}</div>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  listEl.querySelectorAll('[data-revert-batch]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const batchId = btn.dataset.revertBatch;
+      const batch = importBatches.find(b => b.id === batchId);
+      if (batch) {
+        openConfirmDialog(
+          '撤销导入',
+          `确定要撤销批次"${batch.fileName}"的导入吗？\n\n这将删除该批次导入的 ${batch.successCount} 条记录，相关告警和统计数据将重新计算。`,
+          () => revertImportBatch(batchId)
+        );
+      }
+    });
+  });
+
+  listEl.querySelectorAll('[data-view-batch]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const batchId = btn.dataset.viewBatch;
+      const recordIdsEl = document.querySelector(`#recordIds-${batchId}`);
+      if (recordIdsEl) {
+        recordIdsEl.classList.toggle('hidden');
+        btn.textContent = recordIdsEl.classList.contains('hidden') ? '查看记录ID' : '隐藏记录ID';
+      }
+    });
+  });
+}
+
 function loadAlarmConfig() {
   document.querySelector('#multipleExceedThreshold').value = alarmConfig.multipleExceedThreshold;
   document.querySelector('#nightStartHour').value = alarmConfig.nightStartHour;
@@ -3039,7 +3211,7 @@ function handleFile(file) {
       } else {
         rawData = parseCSV(content);
       }
-      processImportData(rawData);
+      processImportData(rawData, file.name);
     } catch (err) {
       alert('文件解析失败：' + err.message);
     }
@@ -3140,7 +3312,7 @@ function validateRecord(record, mapping, lineNum) {
   return { valid: errors.length === 0, errors, record: result, lineNum };
 }
 
-function processImportData(rawData) {
+function processImportData(rawData, fileName) {
   if (!rawData.length) {
     alert('文件中没有数据');
     return;
@@ -3168,7 +3340,7 @@ function processImportData(rawData) {
 
   const duplicateIndices = detectDuplicates(validRecords);
 
-  importData = { validRecords, errorRecords, detectedFields: allDetectedFields, mapping, rawData, duplicateIndices };
+  importData = { validRecords, errorRecords, detectedFields: allDetectedFields, mapping, rawData, duplicateIndices, fileName };
   showPreview();
 }
 
@@ -3293,11 +3465,27 @@ function confirmImport() {
   }
 
   const importedCount = recordsToImport.length;
+  const importedRecordIds = [];
 
   if (importedCount > 0) {
+    recordsToImport.forEach(r => importedRecordIds.push(r.id));
     records = [...recordsToImport, ...records];
     save();
     recalculateAlarms();
+
+    const batch = {
+      id: crypto.randomUUID(),
+      fileName: importData.fileName || '未知文件',
+      importTime: new Date().toISOString(),
+      successCount: importedCount,
+      errorCount: importData.errorRecords.length,
+      skippedCount: skippedCount,
+      recordIds: importedRecordIds,
+      status: 'active'
+    };
+    importBatches = [batch, ...importBatches];
+    saveImportBatches();
+
     render();
   }
 
@@ -3307,7 +3495,7 @@ function confirmImport() {
   const duplicateNote = duplicateCount > 0 && skippedCount === 0
     ? `\n包含重复：${duplicateCount} 条记录（未跳过）`
     : '';
-  alert(`导入完成！\n实际导入：${importedCount} 条记录\n跳过重复：${skippedCount} 条记录${duplicateNote}`);
+  alert(`导入完成！\n实际导入：${importedCount} 条记录\n跳过重复：${skippedCount} 条记录${duplicateNote}\n\n可在"导入记录"中查看和撤销本次导入。`);
 }
 
 const patrolTaskForm = document.querySelector('#patrolTaskForm');
@@ -3729,6 +3917,8 @@ document.addEventListener('keydown', (e) => {
       closeComplaints();
     } else if (!document.querySelector('#patrolTasksOverlay').classList.contains('hidden')) {
       closePatrolTasks();
+    } else if (!document.querySelector('#importBatchesOverlay').classList.contains('hidden')) {
+      closeImportBatches();
     }
   }
 });
