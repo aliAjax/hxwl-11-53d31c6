@@ -6,6 +6,7 @@ const monitoringPointsKey = 'hxwl-11-monitoring-points';
 const alarmsKey = 'hxwl-11-noise-alarms';
 const alarmConfigKey = 'hxwl-11-alarm-config';
 const filterViewsKey = 'hxwl-11-filter-views';
+const defaultViewKey = 'hxwl-11-default-view';
 const patrolTasksKey = 'hxwl-11-patrol-tasks';
 const complaintsKey = 'hxwl-11-noise-complaints';
 
@@ -92,6 +93,7 @@ let currentFilters = {
 
 let filterViews = JSON.parse(localStorage.getItem(filterViewsKey) || 'null') || [];
 let activeViewId = null;
+let defaultViewId = localStorage.getItem(defaultViewKey) || null;
 
 let patrolTasks = JSON.parse(localStorage.getItem(patrolTasksKey) || 'null') || [];
 let editingPatrolTaskId = null;
@@ -172,6 +174,8 @@ document.querySelector('#app').innerHTML = `
               <option value="">选择常用视图</option>
             </select>
             <button id="saveViewBtn" class="secondary">保存视图</button>
+            <button id="renameViewBtn" class="secondary" disabled>重命名</button>
+            <button id="setDefaultViewBtn" class="secondary" disabled>设为默认</button>
             <button id="deleteViewBtn" class="secondary" disabled>删除视图</button>
           </div>
           <button id="resetFiltersBtn" class="secondary">重置筛选</button>
@@ -609,6 +613,24 @@ document.querySelector('#app').innerHTML = `
       </div>
     </div>
 
+    <div class="view-save-overlay hidden" id="viewRenameOverlay">
+      <div class="view-save-panel">
+        <div class="view-save-header">
+          <h2>重命名视图</h2>
+          <button class="view-save-close" id="viewRenameClose">&times;</button>
+        </div>
+        <div class="view-save-content">
+          <label>视图名称</label>
+          <input type="text" id="viewRenameInput" placeholder="请输入新的视图名称" />
+          <p class="view-save-tip">修改当前视图的名称</p>
+        </div>
+        <div class="view-save-actions">
+          <button class="secondary" id="cancelRenameView">取消</button>
+          <button class="primary" id="confirmRenameView">确定</button>
+        </div>
+      </div>
+    </div>
+
     <div class="patrol-tasks-overlay hidden" id="patrolTasksOverlay">
       <div class="patrol-tasks-panel">
         <div class="patrol-tasks-header">
@@ -917,6 +939,8 @@ document.querySelector('#toggleFilterBtn').addEventListener('click', () => {
 
 document.querySelector('#resetFiltersBtn').addEventListener('click', resetFilters);
 document.querySelector('#saveViewBtn').addEventListener('click', saveCurrentView);
+document.querySelector('#renameViewBtn').addEventListener('click', renameActiveView);
+document.querySelector('#setDefaultViewBtn').addEventListener('click', toggleDefaultView);
 document.querySelector('#deleteViewBtn').addEventListener('click', deleteActiveView);
 
 document.querySelector('#viewSelector').addEventListener('change', (e) => {
@@ -936,6 +960,16 @@ document.querySelector('#viewSaveOverlay').addEventListener('click', (e) => {
 document.querySelector('#confirmSaveView').addEventListener('click', doSaveView);
 document.querySelector('#viewNameInput').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') doSaveView();
+});
+
+document.querySelector('#viewRenameClose').addEventListener('click', closeRenameViewDialog);
+document.querySelector('#cancelRenameView').addEventListener('click', closeRenameViewDialog);
+document.querySelector('#viewRenameOverlay').addEventListener('click', (e) => {
+  if (e.target.id === 'viewRenameOverlay') closeRenameViewDialog();
+});
+document.querySelector('#confirmRenameView').addEventListener('click', doRenameView);
+document.querySelector('#viewRenameInput').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') doRenameView();
 });
 
 document.querySelector('#confirmCancel').addEventListener('click', closeConfirmDialog);
@@ -1364,14 +1398,20 @@ function updateFilterUI() {
 
   updateViewSelector();
   document.querySelector('#deleteViewBtn').disabled = !activeViewId;
+  document.querySelector('#renameViewBtn').disabled = !activeViewId;
+  document.querySelector('#setDefaultViewBtn').disabled = !activeViewId;
+  document.querySelector('#setDefaultViewBtn').textContent = 
+    activeViewId && defaultViewId === activeViewId ? '取消默认' : '设为默认';
 }
 
 function updateViewSelector() {
   const selector = document.querySelector('#viewSelector');
   selector.innerHTML = '<option value="">选择常用视图</option>' +
-    filterViews.map(view => 
-      `<option value="${view.id}" ${activeViewId === view.id ? 'selected' : ''}>${view.name}</option>`
-    ).join('');
+    filterViews.map(view => {
+      const isDefault = view.id === defaultViewId;
+      const displayName = isDefault ? `⭐ ${view.name}` : view.name;
+      return `<option value="${view.id}" ${activeViewId === view.id ? 'selected' : ''}>${displayName}</option>`;
+    }).join('');
 }
 
 let confirmCallback = null;
@@ -1452,9 +1492,63 @@ function deleteActiveView() {
   openConfirmDialog('删除视图', `确定要删除视图"${view.name}"吗？`, () => {
     filterViews = filterViews.filter(v => v.id !== activeViewId);
     saveFilterViews();
+    if (defaultViewId === activeViewId) {
+      defaultViewId = null;
+      localStorage.removeItem(defaultViewKey);
+    }
     activeViewId = null;
     updateFilterUI();
   });
+}
+
+function openRenameViewDialog() {
+  if (!activeViewId) return;
+  const view = filterViews.find(v => v.id === activeViewId);
+  if (!view) return;
+
+  document.querySelector('#viewRenameOverlay').classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+  document.querySelector('#viewRenameInput').value = view.name;
+  document.querySelector('#viewRenameInput').focus();
+  document.querySelector('#viewRenameInput').select();
+}
+
+function closeRenameViewDialog() {
+  document.querySelector('#viewRenameOverlay').classList.add('hidden');
+  document.body.style.overflow = '';
+}
+
+function renameActiveView() {
+  openRenameViewDialog();
+}
+
+function doRenameView() {
+  if (!activeViewId) return;
+  const name = document.querySelector('#viewRenameInput').value.trim();
+  if (!name) {
+    openConfirmDialog('提示', '请输入视图名称', null);
+    return;
+  }
+
+  filterViews = filterViews.map(v => 
+    v.id === activeViewId ? { ...v, name, updatedAt: new Date().toISOString() } : v
+  );
+  saveFilterViews();
+  closeRenameViewDialog();
+  updateFilterUI();
+}
+
+function toggleDefaultView() {
+  if (!activeViewId) return;
+
+  if (defaultViewId === activeViewId) {
+    defaultViewId = null;
+    localStorage.removeItem(defaultViewKey);
+  } else {
+    defaultViewId = activeViewId;
+    localStorage.setItem(defaultViewKey, defaultViewId);
+  }
+  updateFilterUI();
 }
 
 function removeFilterTag(index) {
@@ -3546,6 +3640,15 @@ document.querySelector('#complaintLocationSearch').addEventListener('input', (e)
   renderComplaints();
 });
 document.querySelector('#complaintLocation').addEventListener('input', updateComplaintPointInfo);
+
+if (defaultViewId && !filterViews.find(v => v.id === defaultViewId)) {
+  defaultViewId = null;
+  localStorage.removeItem(defaultViewKey);
+}
+
+if (defaultViewId) {
+  loadView(defaultViewId);
+}
 
 recalculateAlarms();
 render();
