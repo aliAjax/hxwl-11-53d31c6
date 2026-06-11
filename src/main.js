@@ -508,6 +508,15 @@ document.querySelector('#app').innerHTML = `
             </div>
           </form>
 
+          <div class="map-view-section" id="mapViewSection">
+            <div class="map-view-header">
+              <h3>🗺️ 点位分布地图</h3>
+              <div class="map-view-stats" id="mapViewStats"></div>
+            </div>
+            <div class="map-container" id="mapContainer"></div>
+            <div class="map-legend" id="mapLegend"></div>
+          </div>
+
           <div class="monitoring-point-list">
             <h3>已有的监测点</h3>
             <div id="monitoringPointsList"></div>
@@ -1822,11 +1831,232 @@ function closeMonitoringPointPanel() {
   monitoringPointForm.reset();
 }
 
+function isValidCoord(latitude, longitude) {
+  if (latitude === null || latitude === undefined || longitude === null || longitude === undefined) return false;
+  const lat = Number(latitude);
+  const lng = Number(longitude);
+  if (isNaN(lat) || isNaN(lng)) return false;
+  if (lat < -90 || lat > 90) return false;
+  if (lng < -180 || lng > 180) return false;
+  return true;
+}
+
+function getPointTypeColor(typeValue) {
+  const colorMap = {
+    traffic: '#dc2626',
+    residential: '#2563eb',
+    commercial: '#d97706',
+    park: '#059669',
+    school: '#7c3aed',
+    other: '#4b5563'
+  };
+  return colorMap[typeValue] || colorMap.other;
+}
+
+function getRecent7DaysMaxDb(pointId) {
+  if (!pointId) return null;
+  const now = new Date();
+  const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const pointRecords = records.filter(r => {
+    if (r.monitoringPointId !== pointId) return false;
+    const recordDate = new Date(r.at);
+    return recordDate >= sevenDaysAgo && recordDate <= now;
+  });
+  if (!pointRecords.length) return null;
+  return Math.max(...pointRecords.map(r => r.db));
+}
+
+function getPointSizeByDb(maxDb) {
+  if (maxDb === null) return 8;
+  const minSize = 8;
+  const maxSize = 20;
+  const minDb = 40;
+  const rangeDb = 90;
+  const normalized = Math.min(Math.max((maxDb - minDb) / rangeDb, 0), 1);
+  return minSize + normalized * (maxSize - minSize);
+}
+
+function getStrokeWidthByDb(maxDb) {
+  if (maxDb === null) return 1.5;
+  if (maxDb >= thresholds.harsh) return 4;
+  if (maxDb >= thresholds.highNoise) return 3;
+  return 1.5;
+}
+
+function getStrokeColorByDb(maxDb) {
+  if (maxDb === null) return '#cbd5e1';
+  if (maxDb >= thresholds.harsh) return '#dc2626';
+  if (maxDb >= thresholds.highNoise) return '#f97316';
+  return '#94a3b8';
+}
+
+function renderMapView() {
+  const container = document.querySelector('#mapContainer');
+  const statsEl = document.querySelector('#mapViewStats');
+  const legendEl = document.querySelector('#mapLegend');
+  if (!container) return;
+
+  const validPoints = monitoringPoints.filter(p => isValidCoord(p.latitude, p.longitude));
+  const invalidCount = monitoringPoints.length - validPoints.length;
+
+  if (statsEl) {
+    statsEl.innerHTML = `
+      <span>共 <strong>${monitoringPoints.length}</strong> 个监测点</span>
+      <span>可绘制 <strong style="color:#059669;">${validPoints.length}</strong></span>
+      ${invalidCount > 0 ? `<span>坐标异常 <strong style="color:#dc2626;">${invalidCount}</strong></span>` : ''}
+    `;
+  }
+
+  if (!validPoints.length) {
+    container.innerHTML = `
+      <div class="map-empty">
+        <div class="map-empty-icon">🗺️</div>
+        <p class="map-empty-text">暂无有效的监测点坐标数据</p>
+        <p class="map-empty-tip">请在上方表单中添加或编辑监测点，填写正确的经纬度</p>
+      </div>
+    `;
+    if (legendEl) legendEl.innerHTML = '';
+    return;
+  }
+
+  const lats = validPoints.map(p => Number(p.latitude));
+  const lngs = validPoints.map(p => Number(p.longitude));
+  const minLat = Math.min(...lats);
+  const maxLat = Math.max(...lats);
+  const minLng = Math.min(...lngs);
+  const maxLng = Math.max(...lngs);
+
+  const latPadding = Math.max((maxLat - minLat) * 0.15, 0.001);
+  const lngPadding = Math.max((maxLng - minLng) * 0.15, 0.001);
+  const viewMinLat = minLat - latPadding;
+  const viewMaxLat = maxLat + latPadding;
+  const viewMinLng = minLng - lngPadding;
+  const viewMaxLng = maxLng + lngPadding;
+
+  const svgWidth = 800;
+  const svgHeight = 360;
+  const padding = 50;
+  const plotWidth = svgWidth - padding * 2;
+  const plotHeight = svgHeight - padding * 2;
+
+  const latRange = viewMaxLat - viewMinLat;
+  const lngRange = viewMaxLng - viewMinLng;
+
+  function coordToSvg(lat, lng) {
+    const x = padding + ((Number(lng) - viewMinLng) / lngRange) * plotWidth;
+    const y = padding + (1 - (Number(lat) - viewMinLat) / latRange) * plotHeight;
+    return { x, y };
+  }
+
+  const gridLines = [];
+  const gridCount = 5;
+  for (let i = 0; i <= gridCount; i++) {
+    const y = padding + (i / gridCount) * plotHeight;
+    const lat = viewMaxLat - (i / gridCount) * latRange;
+    gridLines.push(`<line class="map-grid-line" x1="${padding}" y1="${y}" x2="${svgWidth - padding}" y2="${y}"/>`);
+    gridLines.push(`<text class="map-axis-label" x="${padding - 6}" y="${y + 3}" text-anchor="end">${lat.toFixed(3)}°N</text>`);
+
+    const x = padding + (i / gridCount) * plotWidth;
+    const lng = viewMinLng + (i / gridCount) * lngRange;
+    gridLines.push(`<line class="map-grid-line" x1="${x}" y1="${padding}" x2="${x}" y2="${svgHeight - padding}"/>`);
+    gridLines.push(`<text class="map-axis-label" x="${x}" y="${svgHeight - padding + 16}" text-anchor="middle">${lng.toFixed(3)}°E</text>`);
+  }
+
+  const pointElements = [];
+  validPoints.forEach(point => {
+    const { x, y } = coordToSvg(point.latitude, point.longitude);
+    const typeInfo = getPointTypeInfo(point.type);
+    const fillColor = getPointTypeColor(point.type);
+    const maxDb = getRecent7DaysMaxDb(point.id);
+    const radius = getPointSizeByDb(maxDb);
+    const strokeWidth = getStrokeWidthByDb(maxDb);
+    const strokeColor = getStrokeColorByDb(maxDb);
+
+    pointElements.push(`
+      <g class="map-point" data-map-point-id="${point.id}" style="cursor:pointer;">
+        <circle
+          cx="${x}"
+          cy="${y}"
+          r="${radius}"
+          fill="${fillColor}"
+          fill-opacity="0.85"
+          stroke="${strokeColor}"
+          stroke-width="${strokeWidth}"
+        />
+        <text class="map-point-label" x="${x}" y="${y - radius - 6}" text-anchor="middle">${escapeHtml(point.name)}</text>
+        ${maxDb !== null ? `<text class="map-point-db-label" x="${x}" y="${y + radius + 14}" text-anchor="middle">${maxDb}dB</text>` : ''}
+      </g>
+    `);
+  });
+
+  container.innerHTML = `
+    <svg viewBox="0 0 ${svgWidth} ${svgHeight}" preserveAspectRatio="xMidYMid meet">
+      <defs>
+        <filter id="mapPointShadow" x="-50%" y="-50%" width="200%" height="200%">
+          <feDropShadow dx="0" dy="1" stdDeviation="1.5" flood-opacity="0.2"/>
+        </filter>
+      </defs>
+      <rect x="0" y="0" width="${svgWidth}" height="${svgHeight}" fill="transparent"/>
+      ${gridLines.join('')}
+      <g filter="url(#mapPointShadow)">
+        ${pointElements.join('')}
+      </g>
+    </svg>
+  `;
+
+  if (legendEl) {
+    legendEl.innerHTML = `
+      <div class="map-legend-group">
+        <span class="map-legend-title">点位类型：</span>
+        ${pointTypes.map(t => `
+          <div class="map-legend-item">
+            <span class="map-legend-dot" style="background:${getPointTypeColor(t.value)};"></span>
+            <span>${t.label}</span>
+          </div>
+        `).join('')}
+      </div>
+      <div class="map-legend-group">
+        <span class="map-legend-title">7日最高分贝：</span>
+        <div class="map-legend-size">
+          <div class="map-legend-size-item">
+            <svg width="24" height="24"><circle cx="12" cy="16" r="4" fill="#64748b" stroke="#94a3b8" stroke-width="1.5"/></svg>
+            <span>无数据</span>
+          </div>
+          <div class="map-legend-size-item">
+            <svg width="24" height="24"><circle cx="12" cy="15" r="5" fill="#64748b" stroke="#94a3b8" stroke-width="1.5"/></svg>
+            <span>~50dB</span>
+          </div>
+          <div class="map-legend-size-item">
+            <svg width="28" height="28"><circle cx="14" cy="16" r="8" fill="#64748b" stroke="#f97316" stroke-width="3"/></svg>
+            <span>~75dB</span>
+          </div>
+          <div class="map-legend-size-item">
+            <svg width="32" height="32"><circle cx="16" cy="17" r="11" fill="#64748b" stroke="#dc2626" stroke-width="4"/></svg>
+            <span>~90dB+</span>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  container.querySelectorAll('[data-map-point-id]').forEach(g => {
+    g.addEventListener('click', () => {
+      const pointId = g.dataset.mapPointId;
+      const point = getMonitoringPointById(pointId);
+      if (point) {
+        closeMonitoringPointPanel();
+        openLocationDetail(point.name, point.id);
+      }
+    });
+  });
+}
+
 function renderMonitoringPointsList() {
   const listEl = document.querySelector('#monitoringPointsList');
 
   if (!monitoringPoints.length) {
     listEl.innerHTML = '<p class="empty">暂无监测点，请先添加</p>';
+    renderMapView();
     return;
   }
 
@@ -1837,21 +2067,35 @@ function renderMonitoringPointsList() {
       const recordCount = records.filter(r => r.monitoringPointId === point.id).length;
       const pointRecords = records.filter(r => r.monitoringPointId === point.id);
       const avgDb = pointRecords.length ? average(pointRecords.map(r => r.db)).toFixed(1) : '--';
+      const coordValid = isValidCoord(point.latitude, point.longitude);
 
       return `
-        <div class="monitoring-point-item">
+        <div class="monitoring-point-item" style="${!coordValid ? 'border-color:#fca5a5;background:#fef2f2;' : ''}">
           <div class="monitoring-point-info">
-            <h4>${point.name}</h4>
+            <h4>
+              ${point.name}
+              ${!coordValid ? '<span class="invalid-coord-warning">⚠️ 坐标异常</span>' : ''}
+            </h4>
             <div class="point-meta">
               <span>📍 ${point.district}</span>
-              <span class="point-type-badge ${typeInfo.colorClass}">${typeInfo.label}</span>
+              <span class="point-type-badge ${typeInfo.colorClass} ${!coordValid ? 'invalid-coord-badge' : ''}">${typeInfo.label}</span>
               <span>📊 ${recordCount} 条记录</span>
               ${pointRecords.length ? `<span>🔊 平均 ${avgDb}dB</span>` : ''}
             </div>
-            <div class="point-coords">
-              🗺️ 坐标：${point.latitude.toFixed(4)}, ${point.longitude.toFixed(4)}
+            <div class="point-coords ${!coordValid ? 'invalid' : ''}">
+              🗺️ 坐标：${coordValid
+                ? `${Number(point.latitude).toFixed(4)}, ${Number(point.longitude).toFixed(4)}`
+                : `${point.latitude ?? '空'}, ${point.longitude ?? '空'} — ${
+                    point.latitude === null || point.latitude === undefined || point.longitude === null || point.longitude === undefined
+                      ? '经纬度不能为空'
+                      : isNaN(Number(point.latitude)) || isNaN(Number(point.longitude))
+                        ? '经纬度必须是数字'
+                        : (Number(point.latitude) < -90 || Number(point.latitude) > 90)
+                          ? '纬度范围必须在 -90 到 90 之间'
+                          : '经度范围必须在 -180 到 180 之间'
+                  }`}
             </div>
-            ${point.notes ? `<div class="point-notes">📝 ${point.notes}</div>` : ''}
+            ${point.notes ? `<div class="point-notes">📝 ${escapeHtml(point.notes)}</div>` : ''}
           </div>
           <div class="monitoring-point-actions">
             <button class="secondary" data-edit-point="${point.id}">编辑</button>
@@ -1860,6 +2104,8 @@ function renderMonitoringPointsList() {
         </div>
       `;
     }).join('');
+
+  renderMapView();
 
   listEl.querySelectorAll('[data-edit-point]').forEach(btn => {
     btn.addEventListener('click', () => {
