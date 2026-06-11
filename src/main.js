@@ -2973,15 +2973,10 @@ function confirmImport() {
   resetImport();
 
   const duplicateCount = duplicateSet.size;
-  if (duplicateCount > 0) {
-    if (skippedCount > 0) {
-      alert(`导入完成！\n实际导入：${importedCount} 条记录\n跳过重复：${skippedCount} 条记录`);
-    } else {
-      alert(`导入完成！\n实际导入：${importedCount} 条记录\n包含重复：${duplicateCount} 条记录（未跳过）`);
-    }
-  } else {
-    alert(`成功导入${importedCount}条记录`);
-  }
+  const duplicateNote = duplicateCount > 0 && skippedCount === 0
+    ? `\n包含重复：${duplicateCount} 条记录（未跳过）`
+    : '';
+  alert(`导入完成！\n实际导入：${importedCount} 条记录\n跳过重复：${skippedCount} 条记录${duplicateNote}`);
 }
 
 const patrolTaskForm = document.querySelector('#patrolTaskForm');
