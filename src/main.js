@@ -3678,7 +3678,10 @@ function renderHealthDashboard() {
         </div>
         <div class="health-point-footer">
           <span class="health-point-district">📍 ${h.point.district}</span>
-          <button class="secondary" data-health-detail="${h.point.id}">查看详情</button>
+          <div class="health-point-actions">
+            ${h.dataStatus !== 'normal' ? `<button class="primary health-patrol-btn" data-health-patrol="${h.point.id}" data-status="${h.dataStatus}">补采</button>` : ''}
+            <button class="secondary" data-health-detail="${h.point.id}">查看详情</button>
+          </div>
         </div>
       </div>
     `;
@@ -3694,6 +3697,45 @@ function renderHealthDashboard() {
       }
     });
   });
+
+  listEl.querySelectorAll('[data-health-patrol]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const pointId = btn.dataset.healthPatrol;
+      const status = btn.dataset.status;
+      const point = getMonitoringPointById(pointId);
+      if (point) {
+        createPatrolFromHealthPoint(point, status);
+      }
+    });
+  });
+}
+
+function createPatrolFromHealthPoint(point, status) {
+  closeHealthDashboard();
+  openPatrolTasks();
+  editingPatrolTaskId = null;
+  showPatrolForm(null);
+
+  document.querySelector('#patrolLocation').value = point.name;
+  document.querySelector('#patrolMonitoringPoint').value = point.id;
+
+  const now = new Date();
+  now.setHours(now.getHours() + 2);
+  const defaultTime = toLocalDateTimeInputValue(now);
+  document.querySelector('#patrolScheduledAt').value = defaultTime;
+
+  const noteParts = [];
+  noteParts.push(`监测点：${point.name}`);
+  noteParts.push(`街区：${point.district}`);
+  noteParts.push(`类型：${getPointTypeInfo(point.type).label}`);
+  if (point.notes) {
+    noteParts.push(`说明：${point.notes}`);
+  }
+
+  const statusText = status === 'warning' ? '待补采' : '无记录';
+  document.querySelector('#patrolNotes').value = `${statusText}补采任务\n` + noteParts.join(' | ');
+
+  document.querySelector('#patrolFormSection').scrollIntoView({ behavior: 'smooth' });
 }
 document.querySelector('#newComplaintBtn').addEventListener('click', () => {
   editingComplaintId = null;

@@ -2741,7 +2741,9 @@ button:disabled {
 
 @media print {
   .patrol-tasks-overlay,
-  .hot-patrol-btn {
+  .hot-patrol-btn,
+  .health-dashboard-overlay,
+  .health-patrol-btn {
     display: none !important;
   }
 }
@@ -3601,9 +3603,32 @@ button:disabled {
   color: #79695e;
 }
 
-.health-point-footer .secondary {
+.health-point-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.health-point-footer .secondary,
+.health-point-footer .primary {
   padding: 6px 12px;
   font-size: 13px;
+}
+
+.health-patrol-btn {
+  background: #d94636;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.health-patrol-btn:hover {
+  background: #b83526;
+  transform: translateY(-1px);
 }
 
 @media (max-width: 768px) {
