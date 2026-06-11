@@ -6,10 +6,13 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 5111",
     "build": "vite build",
-    "preview": "vite preview --host 127.0.0.1 --port 5211"
+    "preview": "vite preview --host 127.0.0.1 --port 5211",
+    "test": "vitest run"
   },
   "dependencies": {
     "vite": "^7.0.0"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "vitest": "^4.1.8"
+  }
 }
