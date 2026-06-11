@@ -1870,6 +1870,52 @@ function getMergedAlarmTypes(alarmList) {
   return [...new Set(alarmList.map(a => a.type))];
 }
 
+function getAlarmEventTime(alarm) {
+  if (alarm.at) {
+    return alarm.at;
+  }
+
+  if (alarm.type === 'multiple' && alarm.recordIds?.length) {
+    const relatedRecords = records
+      .filter(r => alarm.recordIds.includes(r.id))
+      .sort((a, b) => a.at.localeCompare(b.at));
+
+    if (relatedRecords.length) {
+      const triggerIndex = Math.min(
+        Math.max((alarm.threshold || alarmConfig.multipleExceedThreshold || 1) - 1, 0),
+        relatedRecords.length - 1
+      );
+      return relatedRecords[triggerIndex].at;
+    }
+  }
+
+  return alarm.day || '';
+}
+
+function getAlarmEventTimestamp(alarm) {
+  return new Date(getAlarmEventTime(alarm)).getTime();
+}
+
+function formatMergedAlarmTime(value) {
+  if (!value) return '';
+  if (value.includes('T')) {
+    return value.slice(5, 16).replace('T', ' ');
+  }
+  return value;
+}
+
+function formatMergedAlarmTimeRange(earliestAt, latestAt, fallbackDay) {
+  if (!earliestAt || !latestAt) {
+    return fallbackDay;
+  }
+
+  if (earliestAt === latestAt) {
+    return formatMergedAlarmTime(earliestAt);
+  }
+
+  return `${formatMergedAlarmTime(earliestAt)} ~ ${formatMergedAlarmTime(latestAt)}`;
+}
+
 function mergeAlarmsByLocationAndDay(alarmList) {
   const timeWindowMs = (alarmConfig.mergeTimeWindowHours || 2) * 60 * 60 * 1000;
   const locationDayGroups = new Map();
@@ -1888,8 +1934,8 @@ function mergeAlarmsByLocationAndDay(alarmList) {
   locationDayGroups.forEach((groupAlarms, key) => {
     const [location, day] = key.split('__');
     const sortedAlarms = [...groupAlarms].sort((a, b) => {
-      const timeA = new Date(a.at || a.day).getTime();
-      const timeB = new Date(b.at || b.day).getTime();
+      const timeA = getAlarmEventTimestamp(a);
+      const timeB = getAlarmEventTimestamp(b);
       return timeA - timeB;
     });
 
@@ -1897,8 +1943,8 @@ function mergeAlarmsByLocationAndDay(alarmList) {
     let currentWindow = [sortedAlarms[0]];
 
     for (let i = 1; i < sortedAlarms.length; i++) {
-      const prevTime = new Date(sortedAlarms[i - 1].at || sortedAlarms[i - 1].day).getTime();
-      const currTime = new Date(sortedAlarms[i].at || sortedAlarms[i].day).getTime();
+      const prevTime = getAlarmEventTimestamp(sortedAlarms[i - 1]);
+      const currTime = getAlarmEventTimestamp(sortedAlarms[i]);
 
       if (currTime - prevTime <= timeWindowMs) {
         currentWindow.push(sortedAlarms[i]);
@@ -1911,16 +1957,16 @@ function mergeAlarmsByLocationAndDay(alarmList) {
 
     timeWindows.forEach((windowAlarms, windowIndex) => {
       const windowSorted = [...windowAlarms].sort((a, b) => {
-        const timeA = new Date(a.at || a.day).getTime();
-        const timeB = new Date(b.at || b.day).getTime();
+        const timeA = getAlarmEventTimestamp(a);
+        const timeB = getAlarmEventTimestamp(b);
         return timeB - timeA;
       });
 
       const maxDb = Math.max(...windowAlarms.map(a => a.db || a.maxDb || 0));
       const types = getMergedAlarmTypes(windowAlarms);
       const status = getMergedAlarmStatus(windowAlarms);
-      const earliestAt = windowSorted[windowSorted.length - 1].at || windowSorted[windowSorted.length - 1].day;
-      const latestAt = windowSorted[0].at || windowSorted[0].day;
+      const earliestAt = getAlarmEventTime(windowSorted[windowSorted.length - 1]);
+      const latestAt = getAlarmEventTime(windowSorted[0]);
       const hasPatrolTask = windowAlarms.some(a => a.patrolTaskId);
 
       const windowId = timeWindows.length > 1
@@ -3278,9 +3324,7 @@ function renderMergedAlarmCard(mergedEvent) {
   const confirmedCount = mergedEvent.alarms.filter(a => a.status === 'confirmed').length;
   const ignoredCount = mergedEvent.alarms.filter(a => a.status === 'ignored').length;
 
-  const timeRange = mergedEvent.earliestAt && mergedEvent.latestAt && mergedEvent.earliestAt !== mergedEvent.latestAt
-    ? `${mergedEvent.earliestAt.slice(5, 16).replace('T', ' ')} ~ ${mergedEvent.latestAt.slice(5, 16).replace('T', ' ')}`
-    : mergedEvent.day;
+  const timeRange = formatMergedAlarmTimeRange(mergedEvent.earliestAt, mergedEvent.latestAt, mergedEvent.day);
 
   const windowLabel = mergedEvent.totalWindows
     ? `（时段${mergedEvent.windowIndex}/${mergedEvent.totalWindows}）`
