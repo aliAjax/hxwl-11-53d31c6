@@ -3465,29 +3465,27 @@ function confirmImport() {
   }
 
   const importedCount = recordsToImport.length;
-  const importedRecordIds = [];
+  const importedRecordIds = recordsToImport.map(r => r.id);
 
   if (importedCount > 0) {
-    recordsToImport.forEach(r => importedRecordIds.push(r.id));
     records = [...recordsToImport, ...records];
     save();
     recalculateAlarms();
-
-    const batch = {
-      id: crypto.randomUUID(),
-      fileName: importData.fileName || '未知文件',
-      importTime: new Date().toISOString(),
-      successCount: importedCount,
-      errorCount: importData.errorRecords.length,
-      skippedCount: skippedCount,
-      recordIds: importedRecordIds,
-      status: 'active'
-    };
-    importBatches = [batch, ...importBatches];
-    saveImportBatches();
-
     render();
   }
+
+  const batch = {
+    id: crypto.randomUUID(),
+    fileName: importData.fileName || '未知文件',
+    importTime: new Date().toISOString(),
+    successCount: importedCount,
+    errorCount: importData.errorRecords.length,
+    skippedCount: skippedCount,
+    recordIds: importedRecordIds,
+    status: 'active'
+  };
+  importBatches = [batch, ...importBatches];
+  saveImportBatches();
 
   resetImport();
 
