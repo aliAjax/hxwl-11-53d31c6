@@ -80,6 +80,8 @@ let useManualLocation = false;
 let selectedMonitoringPointFilter = '';
 let alarmStatusFilter = 'all';
 let alarmTypeFilter = 'all';
+let alarmViewMode = 'list';
+const expandedMergedAlarms = new Set();
 
 let currentFilters = {
   dateStart: '',
@@ -578,6 +580,13 @@ document.querySelector('#app').innerHTML = `
                 <option value="single">单条超阈值</option>
                 <option value="multiple">日内多次超标</option>
                 <option value="nighttime">夜间高噪声</option>
+              </select>
+            </div>
+            <div class="filter-group">
+              <label>视图模式：</label>
+              <select id="alarmViewModeSelect">
+                <option value="list">列表视图</option>
+                <option value="merged">合并视图</option>
               </select>
             </div>
             <button class="secondary" id="recalculateAlarmsBtn">重新计算告警</button>
@@ -1125,6 +1134,10 @@ document.querySelector('#alarmStatusFilter').addEventListener('change', (e) => {
 });
 document.querySelector('#alarmTypeFilter').addEventListener('change', (e) => {
   alarmTypeFilter = e.target.value;
+  renderAlarmCenter();
+});
+document.querySelector('#alarmViewModeSelect').addEventListener('change', (e) => {
+  alarmViewMode = e.target.value;
   renderAlarmCenter();
 });
 document.querySelector('#recalculateAlarmsBtn').addEventListener('click', () => {
@@ -1824,6 +1837,79 @@ function clearAlarmPatrolTaskId(taskId) {
   });
   if (updated) saveAlarms();
   return updated;
+}
+
+function getAlarmDay(alarm) {
+  if (alarm.type === 'multiple' && alarm.day) {
+    return alarm.day;
+  }
+  if (alarm.at) {
+    return alarm.at.slice(0, 10);
+  }
+  return '';
+}
+
+function getMergedAlarmStatus(alarmList) {
+  if (alarmList.some(a => a.status === 'pending')) return 'pending';
+  if (alarmList.some(a => a.status === 'confirmed')) return 'confirmed';
+  return 'ignored';
+}
+
+function getMergedAlarmTypes(alarmList) {
+  return [...new Set(alarmList.map(a => a.type))];
+}
+
+function mergeAlarmsByLocationAndDay(alarmList) {
+  const groups = new Map();
+
+  alarmList.forEach(alarm => {
+    const day = getAlarmDay(alarm);
+    const key = `${alarm.location}__${day}`;
+    if (!groups.has(key)) {
+      groups.set(key, []);
+    }
+    groups.get(key).push(alarm);
+  });
+
+  const mergedEvents = [];
+  groups.forEach((groupAlarms, key) => {
+    const [location, day] = key.split('__');
+    const sortedAlarms = [...groupAlarms].sort((a, b) => {
+      const timeA = a.at || a.day;
+      const timeB = b.at || b.day;
+      return new Date(timeB) - new Date(timeA);
+    });
+
+    const maxDb = Math.max(...groupAlarms.map(a => a.db || a.maxDb || 0));
+    const types = getMergedAlarmTypes(groupAlarms);
+    const status = getMergedAlarmStatus(groupAlarms);
+    const earliestAt = sortedAlarms[sortedAlarms.length - 1].at || sortedAlarms[sortedAlarms.length - 1].day;
+    const latestAt = sortedAlarms[0].at || sortedAlarms[0].day;
+    const hasPatrolTask = groupAlarms.some(a => a.patrolTaskId);
+
+    mergedEvents.push({
+      id: `merged-${key}`,
+      key,
+      location,
+      day,
+      alarms: sortedAlarms,
+      alarmCount: sortedAlarms.length,
+      types,
+      status,
+      maxDb,
+      earliestAt,
+      latestAt,
+      hasPatrolTask
+    });
+  });
+
+  mergedEvents.sort((a, b) => {
+    const timeA = new Date(a.latestAt || a.day);
+    const timeB = new Date(b.latestAt || b.day);
+    return timeB - timeA;
+  });
+
+  return mergedEvents;
 }
 
 function getAlarmRelatedRecordsInfo(alarm) {
@@ -3043,6 +3129,183 @@ function loadAlarmConfig() {
   document.querySelector('#nightNoiseThreshold').value = alarmConfig.nightNoiseThreshold;
   document.querySelector('#alarmStatusFilter').value = alarmStatusFilter;
   document.querySelector('#alarmTypeFilter').value = alarmTypeFilter;
+  document.querySelector('#alarmViewModeSelect').value = alarmViewMode;
+}
+
+function renderAlarmCard(alarm) {
+  const statusClass = `alarm-status-${alarm.status}`;
+  const typeClass = `alarm-type-${alarm.type}`;
+  const statusLabel = {
+    pending: '待处理',
+    confirmed: '已确认',
+    ignored: '已忽略'
+  }[alarm.status];
+
+  let detailInfo = '';
+  if (alarm.type === 'single' || alarm.type === 'nighttime') {
+    detailInfo = `
+        <div class="alarm-detail">
+          <span>时间：${alarm.at.replace('T', ' ')}</span>
+          <span>来源：${alarm.source}</span>
+          <span>阈值：${alarm.threshold}dB</span>
+        </div>
+      `;
+  } else if (alarm.type === 'multiple') {
+    detailInfo = `
+        <div class="alarm-detail">
+          <span>日期：${alarm.day}</span>
+          <span>超标次数：${alarm.recordCount}次</span>
+          <span>最高分贝：${alarm.maxDb}dB</span>
+          <span>噪声阈值：${alarm.noiseThreshold}dB</span>
+        </div>
+      `;
+  }
+
+  let patrolTaskInfo = '';
+  let patrolTaskBtn = '';
+  if (alarm.patrolTaskId) {
+    const task = patrolTasks.find(t => t.id === alarm.patrolTaskId);
+    if (task) {
+      const taskStatusLabel = patrolStatusLabels[task.status] || '未知';
+      const taskStatusClass = `patrol-status-${task.status}`;
+      patrolTaskInfo = `
+          <div class="alarm-patrol-info">
+            <span class="alarm-patrol-label">🔗 关联巡查任务：</span>
+            <span class="patrol-status-badge ${taskStatusClass}">${taskStatusLabel}</span>
+            <span class="alarm-patrol-task">${task.location} · ${task.assignee}</span>
+            <button class="secondary alarm-patrol-view-btn" data-view-patrol="${task.id}">查看任务</button>
+          </div>
+        `;
+    } else {
+      patrolTaskInfo = `
+          <div class="alarm-patrol-info alarm-patrol-missing">
+            <span class="alarm-patrol-label">⚠️ 关联的巡查任务已不存在</span>
+          </div>
+        `;
+    }
+  } else {
+    patrolTaskBtn = `<button class="primary" data-create-patrol="${alarm.id}">转巡查任务</button>`;
+  }
+
+  return `
+      <div class="alarm-item ${statusClass} ${typeClass}">
+        <div class="alarm-header">
+          <div class="alarm-title">
+            <span class="alarm-type-badge">${alarm.typeLabel}</span>
+            <span class="alarm-location">${alarm.location}</span>
+          </div>
+          <span class="alarm-db">${alarm.db || alarm.maxDb}dB</span>
+        </div>
+        <div class="alarm-message">${alarm.message}</div>
+        ${detailInfo}
+        ${patrolTaskInfo}
+        <div class="alarm-footer">
+          <span class="alarm-status-badge ${statusClass}">${statusLabel}</span>
+          <span class="alarm-time">生成于 ${new Date(alarm.createdAt).toLocaleString('zh-CN')}</span>
+          <div class="alarm-actions">
+            ${patrolTaskBtn}
+            ${alarm.status === 'pending' ? `
+              <button class="secondary" data-confirm="${alarm.id}">确认</button>
+              <button class="secondary" data-ignore="${alarm.id}">忽略</button>
+            ` : `
+              <button class="secondary" data-reopen="${alarm.id}">重新打开</button>
+            `}
+          </div>
+        </div>
+      </div>
+    `;
+}
+
+function renderMergedAlarmCard(mergedEvent) {
+  const isExpanded = expandedMergedAlarms.has(mergedEvent.id);
+  const statusClass = `alarm-status-${mergedEvent.status}`;
+  const statusLabel = {
+    pending: '待处理',
+    confirmed: '已确认',
+    ignored: '已忽略'
+  }[mergedEvent.status];
+
+  const typeBadges = mergedEvent.types.map(type => {
+    const typeLabels = { single: '单条超阈值', multiple: '日内多次超标', nighttime: '夜间高噪声' };
+    return `<span class="alarm-type-badge alarm-type-badge-${type}">${typeLabels[type]}</span>`;
+  }).join('');
+
+  const pendingCount = mergedEvent.alarms.filter(a => a.status === 'pending').length;
+  const confirmedCount = mergedEvent.alarms.filter(a => a.status === 'confirmed').length;
+  const ignoredCount = mergedEvent.alarms.filter(a => a.status === 'ignored').length;
+
+  const timeRange = mergedEvent.earliestAt && mergedEvent.latestAt && mergedEvent.earliestAt !== mergedEvent.latestAt
+    ? `${mergedEvent.earliestAt.slice(5, 16).replace('T', ' ')} ~ ${mergedEvent.latestAt.slice(5, 16).replace('T', ' ')}`
+    : mergedEvent.day;
+
+  const expandIcon = isExpanded ? '▼' : '▶';
+
+  let innerAlarmsHtml = '';
+  if (isExpanded) {
+    innerAlarmsHtml = `
+      <div class="merged-alarm-details">
+        <div class="merged-alarm-section">
+          <h4>关联告警记录</h4>
+          <div class="merged-alarm-list">
+            ${mergedEvent.alarms.map(alarm => renderAlarmCard(alarm)).join('')}
+          </div>
+        </div>
+        <div class="merged-alarm-section">
+          <h4>触发规则</h4>
+          <div class="merged-rules-list">
+            ${mergedEvent.types.map(type => {
+              const ruleDescs = {
+                single: `单条记录噪声值 ≥ ${thresholds.harsh}dB（刺耳阈值）`,
+                multiple: `同一地点日内超标次数 ≥ ${alarmConfig.multipleExceedThreshold} 次（高噪声阈值 ${thresholds.highNoise}dB）`,
+                nighttime: `夜间时段（${alarmConfig.nightStartHour}:00-${alarmConfig.nightEndHour}:00）噪声 ≥ ${alarmConfig.nightNoiseThreshold}dB`
+              };
+              const typeLabels = { single: '单条超阈值', multiple: '日内多次超标', nighttime: '夜间高噪声' };
+              return `
+                <div class="merged-rule-item">
+                  <span class="alarm-type-badge alarm-type-badge-${type}">${typeLabels[type]}</span>
+                  <span class="merged-rule-desc">${ruleDescs[type]}</span>
+                </div>
+              `;
+            }).join('')}
+          </div>
+        </div>
+        <div class="merged-alarm-section">
+          <h4>处理状态统计</h4>
+          <div class="merged-status-summary">
+            <span class="merged-status-item merged-status-pending">待处理：${pendingCount} 条</span>
+            <span class="merged-status-item merged-status-confirmed">已确认：${confirmedCount} 条</span>
+            <span class="merged-status-item merged-status-ignored">已忽略：${ignoredCount} 条</span>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="merged-alarm-item ${statusClass}">
+      <div class="merged-alarm-header" data-toggle-merged="${mergedEvent.id}">
+        <div class="merged-alarm-expand">${expandIcon}</div>
+        <div class="merged-alarm-main">
+          <div class="merged-alarm-title">
+            <span class="merged-alarm-location">${mergedEvent.location}</span>
+            <span class="merged-alarm-count">${mergedEvent.alarmCount} 条告警</span>
+          </div>
+          <div class="merged-alarm-types">
+            ${typeBadges}
+          </div>
+          <div class="merged-alarm-meta">
+            <span class="merged-alarm-time">📅 ${timeRange}</span>
+            <span class="merged-alarm-maxdb">🔊 最高 ${mergedEvent.maxDb}dB</span>
+            ${mergedEvent.hasPatrolTask ? '<span class="merged-alarm-patrol">🔗 已关联巡查</span>' : ''}
+          </div>
+        </div>
+        <div class="merged-alarm-status-badge">
+          <span class="alarm-status-badge ${statusClass}">${statusLabel}</span>
+        </div>
+      </div>
+      ${innerAlarmsHtml}
+    </div>
+  `;
 }
 
 function renderAlarmCenter() {
@@ -3073,92 +3336,31 @@ function renderAlarmCenter() {
     alarmListEl.innerHTML = '<p class="empty">暂无告警记录</p>';
     return;
   }
-  
-  alarmListEl.innerHTML = filteredAlarms.map(alarm => {
-    const statusClass = `alarm-status-${alarm.status}`;
-    const typeClass = `alarm-type-${alarm.type}`;
-    const statusLabel = {
-      pending: '待处理',
-      confirmed: '已确认',
-      ignored: '已忽略'
-    }[alarm.status];
+
+  if (alarmViewMode === 'merged') {
+    const mergedEvents = mergeAlarmsByLocationAndDay(filteredAlarms);
     
-    let detailInfo = '';
-    if (alarm.type === 'single' || alarm.type === 'nighttime') {
-      detailInfo = `
-        <div class="alarm-detail">
-          <span>时间：${alarm.at.replace('T', ' ')}</span>
-          <span>来源：${alarm.source}</span>
-          <span>阈值：${alarm.threshold}dB</span>
-        </div>
-      `;
-    } else if (alarm.type === 'multiple') {
-      detailInfo = `
-        <div class="alarm-detail">
-          <span>日期：${alarm.day}</span>
-          <span>超标次数：${alarm.recordCount}次</span>
-          <span>最高分贝：${alarm.maxDb}dB</span>
-          <span>噪声阈值：${alarm.noiseThreshold}dB</span>
-        </div>
-      `;
+    if (!mergedEvents.length) {
+      alarmListEl.innerHTML = '<p class="empty">暂无告警事件</p>';
+      return;
     }
 
-    let patrolTaskInfo = '';
-    let patrolTaskBtn = '';
-    if (alarm.patrolTaskId) {
-      const task = patrolTasks.find(t => t.id === alarm.patrolTaskId);
-      if (task) {
-        const taskStatusLabel = patrolStatusLabels[task.status] || '未知';
-        const taskStatusClass = `patrol-status-${task.status}`;
-        patrolTaskInfo = `
-          <div class="alarm-patrol-info">
-            <span class="alarm-patrol-label">🔗 关联巡查任务：</span>
-            <span class="patrol-status-badge ${taskStatusClass}">${taskStatusLabel}</span>
-            <span class="alarm-patrol-task">${task.location} · ${task.assignee}</span>
-            <button class="secondary alarm-patrol-view-btn" data-view-patrol="${task.id}">查看任务</button>
-          </div>
-        `;
-      } else {
-        patrolTaskInfo = `
-          <div class="alarm-patrol-info alarm-patrol-missing">
-            <span class="alarm-patrol-label">⚠️ 关联的巡查任务已不存在</span>
-          </div>
-        `;
-      }
-    } else {
-      patrolTaskBtn = `<button class="primary" data-create-patrol="${alarm.id}">转巡查任务</button>`;
-    }
+    alarmListEl.innerHTML = mergedEvents.map(event => renderMergedAlarmCard(event)).join('');
     
-    return `
-      <div class="alarm-item ${statusClass} ${typeClass}">
-        <div class="alarm-header">
-          <div class="alarm-title">
-            <span class="alarm-type-badge">${alarm.typeLabel}</span>
-            <span class="alarm-location">${alarm.location}</span>
-          </div>
-          <span class="alarm-db">${alarm.db || alarm.maxDb}dB</span>
-        </div>
-        <div class="alarm-message">${alarm.message}</div>
-        ${detailInfo}
-        ${patrolTaskInfo}
-        <div class="alarm-footer">
-          <span class="alarm-status-badge ${statusClass}">${statusLabel}</span>
-          <span class="alarm-time">生成于 ${new Date(alarm.createdAt).toLocaleString('zh-CN')}</span>
-          <div class="alarm-actions">
-            ${patrolTaskBtn}
-            ${alarm.status === 'pending' ? `
-              <button class="secondary" data-confirm="${alarm.id}">确认</button>
-              <button class="secondary" data-ignore="${alarm.id}">忽略</button>
-            ` : alarm.status === 'confirmed' ? `
-              <button class="secondary" data-reopen="${alarm.id}">重新打开</button>
-            ` : `
-              <button class="secondary" data-reopen="${alarm.id}">重新打开</button>
-            `}
-          </div>
-        </div>
-      </div>
-    `;
-  }).join('');
+    alarmListEl.querySelectorAll('[data-toggle-merged]').forEach(header => {
+      header.addEventListener('click', () => {
+        const id = header.dataset.toggleMerged;
+        if (expandedMergedAlarms.has(id)) {
+          expandedMergedAlarms.delete(id);
+        } else {
+          expandedMergedAlarms.add(id);
+        }
+        renderAlarmCenter();
+      });
+    });
+  } else {
+    alarmListEl.innerHTML = filteredAlarms.map(alarm => renderAlarmCard(alarm)).join('');
+  }
   
   alarmListEl.querySelectorAll('[data-confirm]').forEach(btn => {
     btn.addEventListener('click', () => updateAlarmStatus(btn.dataset.confirm, 'confirmed'));
