@@ -1831,8 +1831,12 @@ function closeMonitoringPointPanel() {
   monitoringPointForm.reset();
 }
 
+function isEmptyCoordValue(value) {
+  return value === null || value === undefined || (typeof value === 'string' && value.trim() === '');
+}
+
 function isValidCoord(latitude, longitude) {
-  if (latitude === null || latitude === undefined || longitude === null || longitude === undefined) return false;
+  if (isEmptyCoordValue(latitude) || isEmptyCoordValue(longitude)) return false;
   const lat = Number(latitude);
   const lng = Number(longitude);
   if (isNaN(lat) || isNaN(lng)) return false;
@@ -2085,8 +2089,8 @@ function renderMonitoringPointsList() {
             <div class="point-coords ${!coordValid ? 'invalid' : ''}">
               🗺️ 坐标：${coordValid
                 ? `${Number(point.latitude).toFixed(4)}, ${Number(point.longitude).toFixed(4)}`
-                : `${point.latitude ?? '空'}, ${point.longitude ?? '空'} — ${
-                    point.latitude === null || point.latitude === undefined || point.longitude === null || point.longitude === undefined
+                : `${isEmptyCoordValue(point.latitude) ? '空' : point.latitude}, ${isEmptyCoordValue(point.longitude) ? '空' : point.longitude} — ${
+                    isEmptyCoordValue(point.latitude) || isEmptyCoordValue(point.longitude)
                       ? '经纬度不能为空'
                       : isNaN(Number(point.latitude)) || isNaN(Number(point.longitude))
                         ? '经纬度必须是数字'
