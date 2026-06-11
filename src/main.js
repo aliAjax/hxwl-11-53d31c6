@@ -291,6 +291,13 @@ document.querySelector('#app').innerHTML = `
           <div class="preview-stat"><span>识别字段</span><strong id="fieldCount">0</strong></div>
           <div class="preview-stat"><span>可导入行数</span><strong id="validCount">0</strong></div>
           <div class="preview-stat"><span>错误行数</span><strong id="errorCount">0</strong></div>
+          <div class="preview-stat duplicate-stat"><span>疑似重复</span><strong id="duplicateCount">0</strong></div>
+        </div>
+        <div class="duplicate-option" id="duplicateOption">
+          <label class="duplicate-checkbox-label">
+            <input type="checkbox" id="skipDuplicates" checked />
+            <span>跳过疑似重复记录（时间、地点、分贝、来源完全相同的记录）</span>
+          </label>
         </div>
         <div class="preview-fields" id="fieldMapping"></div>
         <div class="preview-errors" id="errorSummary"></div>
@@ -2422,6 +2429,27 @@ const importPreview = document.querySelector('#importPreview');
 const cancelImportBtn = document.querySelector('#cancelImport');
 const confirmImportBtn = document.querySelector('#confirmImport');
 
+function generateRecordKey(record) {
+  return `${record.at}|${record.location}|${record.db}|${record.source}`;
+}
+
+function detectDuplicates(validRecords) {
+  const existingKeys = new Set(records.map(r => generateRecordKey(r)));
+  const seenKeys = new Set();
+  const duplicates = [];
+
+  validRecords.forEach((record, index) => {
+    const key = generateRecordKey(record);
+    const isDuplicate = existingKeys.has(key) || seenKeys.has(key);
+    if (isDuplicate) {
+      duplicates.push(index);
+    }
+    seenKeys.add(key);
+  });
+
+  return duplicates;
+}
+
 const fieldMappingConfig = {
   location: ['地点', 'location', 'place', '地址', '位置', '街区'],
   at: ['时间', 'at', 'datetime', 'date', 'timestamp', '观测时间', '记录时间'],
@@ -2807,7 +2835,9 @@ function processImportData(rawData) {
     }
   });
 
-  importData = { validRecords, errorRecords, detectedFields: allDetectedFields, mapping, rawData };
+  const duplicateIndices = detectDuplicates(validRecords);
+
+  importData = { validRecords, errorRecords, detectedFields: allDetectedFields, mapping, rawData, duplicateIndices };
   showPreview();
 }
 
@@ -2834,9 +2864,19 @@ function showPreview() {
   importArea.classList.add('hidden');
   importPreview.classList.remove('hidden');
 
+  const duplicateSet = new Set(importData.duplicateIndices);
+
   document.querySelector('#fieldCount').textContent = Object.keys(importData.detectedFields).length;
   document.querySelector('#validCount').textContent = importData.validRecords.length;
   document.querySelector('#errorCount').textContent = importData.errorRecords.length;
+  document.querySelector('#duplicateCount').textContent = duplicateSet.size;
+
+  const duplicateOptionEl = document.querySelector('#duplicateOption');
+  if (duplicateSet.size > 0) {
+    duplicateOptionEl.classList.remove('hidden');
+  } else {
+    duplicateOptionEl.classList.add('hidden');
+  }
 
   const fieldMappingEl = document.querySelector('#fieldMapping');
   fieldMappingEl.innerHTML = `
@@ -2869,21 +2909,29 @@ function showPreview() {
 
   const previewHead = document.querySelector('#previewHead');
   const previewBody = document.querySelector('#previewBody');
-  const previewRecords = importData.validRecords.slice(0, 10);
+  const previewStart = 0;
+  const previewEnd = Math.min(10, importData.validRecords.length);
 
-  previewHead.innerHTML = `<tr><th>时间</th><th>地点</th><th>分贝</th><th>来源</th><th>感受</th></tr>`;
-  previewBody.innerHTML = previewRecords.map(record => `
-    <tr>
+  previewHead.innerHTML = `<tr><th>状态</th><th>时间</th><th>地点</th><th>分贝</th><th>来源</th><th>感受</th></tr>`;
+  let previewHtml = '';
+  for (let globalIndex = previewStart; globalIndex < previewEnd; globalIndex++) {
+    const record = importData.validRecords[globalIndex];
+    const isDuplicate = duplicateSet.has(globalIndex);
+    previewHtml += `
+    <tr class="${isDuplicate ? 'duplicate-row' : ''}">
+      <td class="status-cell">${isDuplicate ? '<span class="duplicate-badge">疑似重复</span>' : '<span class="ok-badge">正常</span>'}</td>
       <td>${record.at.replace('T', ' ')}</td>
       <td>${record.location}</td>
       <td>${record.db}dB</td>
       <td>${record.source}</td>
       <td>${record.feeling}</td>
     </tr>
-  `).join('');
+  `;
+  }
+  previewBody.innerHTML = previewHtml;
 
   if (importData.validRecords.length > 10) {
-    previewBody.innerHTML += `<tr><td colspan="5" class="more-rows">...还有${importData.validRecords.length - 10}条记录</td></tr>`;
+    previewBody.innerHTML += `<tr><td colspan="6" class="more-rows">...还有${importData.validRecords.length - 10}条记录</td></tr>`;
   }
 
   document.querySelector('#confirmImport').disabled = importData.validRecords.length === 0;
@@ -2898,12 +2946,37 @@ function resetImport() {
 
 function confirmImport() {
   if (!importData || !importData.validRecords.length) return;
-  records = [...importData.validRecords, ...records];
-  save();
-  recalculateAlarms();
-  render();
+
+  const skipDuplicates = document.querySelector('#skipDuplicates').checked;
+  const duplicateSet = new Set(importData.duplicateIndices);
+
+  let recordsToImport;
+  let skippedCount = 0;
+
+  if (skipDuplicates && duplicateSet.size > 0) {
+    recordsToImport = importData.validRecords.filter((_, index) => !duplicateSet.has(index));
+    skippedCount = duplicateSet.size;
+  } else {
+    recordsToImport = [...importData.validRecords];
+    skippedCount = 0;
+  }
+
+  const importedCount = recordsToImport.length;
+
+  if (importedCount > 0) {
+    records = [...recordsToImport, ...records];
+    save();
+    recalculateAlarms();
+    render();
+  }
+
   resetImport();
-  alert(`成功导入${importData.validRecords.length}条记录`);
+
+  if (skippedCount > 0) {
+    alert(`导入完成！\n实际导入：${importedCount} 条记录\n跳过重复：${skippedCount} 条记录`);
+  } else {
+    alert(`成功导入${importedCount}条记录`);
+  }
 }
 
 const patrolTaskForm = document.querySelector('#patrolTaskForm');
