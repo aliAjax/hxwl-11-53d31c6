@@ -80,14 +80,18 @@ describe('buildRecordMapping', () => {
     });
   });
 
-  it('should map English field aliases (note: "location" contains "at" so at maps to location key)', () => {
+  it('should map English field aliases without matching "at" inside "location"', () => {
     const record = { location: '图书馆', at: '2026-06-09 14:30', db: 42, source: '翻书声', feeling: '安静' };
     const mapping = buildRecordMapping(record);
     expect(mapping.location).toBe('location');
-    expect(mapping.at).toBe('location');
+    expect(mapping.at).toBe('at');
     expect(mapping.db).toBe('db');
     expect(mapping.source).toBe('source');
     expect(mapping.feeling).toBe('feeling');
+
+    const result = validateRecord(record, mapping, 2);
+    expect(result.valid).toBe(true);
+    expect(result.record.at).toBe('2026-06-09T14:30');
   });
 
   it('should map mixed Chinese/English aliases', () => {

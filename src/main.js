@@ -3941,9 +3941,8 @@ function mapFields(rawRecord) {
   const mapping = {};
   const detectedFields = {};
   Object.keys(rawRecord).forEach(key => {
-    const lowerKey = key.toLowerCase().trim();
     for (const [field, aliases] of Object.entries(fieldMappingConfig)) {
-      if (aliases.some(alias => lowerKey === alias.toLowerCase() || lowerKey.includes(alias.toLowerCase()))) {
+      if (aliases.some(alias => matchesFieldAlias(key, alias))) {
         mapping[field] = key;
         detectedFields[field] = key;
         break;
@@ -3951,6 +3950,15 @@ function mapFields(rawRecord) {
     }
   });
   return { mapping, detectedFields };
+}
+
+function matchesFieldAlias(key, alias) {
+  const lowerKey = key.toLowerCase().trim();
+  const lowerAlias = alias.toLowerCase();
+  if (lowerKey === lowerAlias) return true;
+
+  const canUsePartialMatch = alias.length > 2 || /[^\x00-\x7F]/.test(alias);
+  return canUsePartialMatch && lowerKey.includes(lowerAlias);
 }
 
 function validateRecord(record, mapping, lineNum) {
@@ -4036,11 +4044,7 @@ function buildRecordMapping(record) {
   const mapping = {};
   for (const [field, aliases] of Object.entries(fieldMappingConfig)) {
     for (const alias of aliases) {
-      const lowerAlias = alias.toLowerCase();
-      const match = recordKeys.find(k => {
-        const lowerKey = k.toLowerCase().trim();
-        return lowerKey === lowerAlias || lowerKey.includes(lowerAlias);
-      });
+      const match = recordKeys.find(k => matchesFieldAlias(k, alias));
       if (match) {
         mapping[field] = match;
         break;
