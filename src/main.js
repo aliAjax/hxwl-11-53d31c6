@@ -89,7 +89,8 @@ let currentFilters = {
   feelings: [],
   dbMin: '',
   dbMax: '',
-  highNoiseStatus: 'all'
+  highNoiseStatus: 'all',
+  timePeriod: ''
 };
 
 let filterViews = JSON.parse(localStorage.getItem(filterViewsKey) || 'null') || [];
@@ -1337,6 +1338,12 @@ function applyFilters(data) {
     if (currentFilters.dateEnd && record.at.slice(0, 10) > currentFilters.dateEnd) {
       return false;
     }
+    if (currentFilters.timePeriod) {
+      const hour = new Date(record.at).getHours();
+      if (getTimePeriodKey(hour) !== currentFilters.timePeriod) {
+        return false;
+      }
+    }
     if (currentFilters.locations.length > 0 && !currentFilters.locations.includes(record.location)) {
       return false;
     }
@@ -1366,6 +1373,7 @@ function countActiveFilters() {
   let count = 0;
   if (currentFilters.dateStart) count++;
   if (currentFilters.dateEnd) count++;
+  if (currentFilters.timePeriod) count++;
   if (currentFilters.locations.length > 0) count++;
   if (currentFilters.sources.length > 0) count++;
   if (currentFilters.feelings.length > 0) count++;
@@ -1381,6 +1389,12 @@ function getActiveFilterTags() {
     const start = currentFilters.dateStart || '不限';
     const end = currentFilters.dateEnd || '不限';
     tags.push({ label: `日期: ${start} ~ ${end}`, type: 'date' });
+  }
+  if (currentFilters.timePeriod) {
+    const period = timePeriods.find(p => p.key === currentFilters.timePeriod);
+    if (period) {
+      tags.push({ label: `时段: ${period.label} (${String(period.startHour).padStart(2, '0')}:00-${period.key === 'night' ? '次日' : ''}${String(period.endHour).padStart(2, '0')}:00)`, type: 'timePeriod' });
+    }
   }
   if (currentFilters.locations.length > 0) {
     tags.push({ label: `地点: ${currentFilters.locations.join(', ')}`, type: 'location', values: currentFilters.locations });
@@ -1413,7 +1427,8 @@ function resetFilters() {
     feelings: [],
     dbMin: '',
     dbMax: '',
-    highNoiseStatus: 'all'
+    highNoiseStatus: 'all',
+    timePeriod: ''
   };
   activeViewId = null;
   updateFilterUI();
@@ -1646,6 +1661,9 @@ function removeFilterTag(index) {
       break;
     case 'status':
       currentFilters.highNoiseStatus = 'all';
+      break;
+    case 'timePeriod':
+      currentFilters.timePeriod = '';
       break;
   }
   activeViewId = null;
@@ -2399,16 +2417,12 @@ function navigateToRecords(rangeKey, periodKey, pointId, location) {
   currentFilters.dbMin = '';
   currentFilters.dbMax = '';
   currentFilters.locations = location ? [location] : [];
+  currentFilters.timePeriod = periodKey;
   activeViewId = null;
 
   if (pointId) {
     selectedMonitoringPointFilter = pointId;
   }
-
-  const periodRecords = getRecordsWithinDays(records, range.days, pointId, location).filter(r => {
-    const hour = new Date(r.at).getHours();
-    return getTimePeriodKey(hour) === periodKey;
-  });
 
   document.querySelector('#locationDetailOverlay').classList.add('hidden');
   document.querySelector('#healthDashboardOverlay').classList.add('hidden');
@@ -2417,6 +2431,12 @@ function navigateToRecords(rangeKey, periodKey, pointId, location) {
 
   updateFilterUI();
   render();
+
+  let preFiltered = records.filter((record) => [record.location, record.source, record.feeling].join(' ').includes(search.value.trim()));
+  if (selectedMonitoringPointFilter) {
+    preFiltered = preFiltered.filter(record => record.monitoringPointId === selectedMonitoringPointFilter);
+  }
+  const periodRecords = applyFilters(preFiltered);
 
   if (periodRecords.length > 0) {
     const rowsEl = document.querySelector('#rows');
