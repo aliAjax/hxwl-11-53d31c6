@@ -363,6 +363,11 @@ document.querySelector('#app').innerHTML = `
           <h3>分贝变化趋势</h3>
           <div class="chart" id="locationDetailChart"></div>
         </div>
+        <div class="location-detail-heatmap">
+          <h3>🔥 时段热力分析</h3>
+          <p class="heatmap-hint">按早高峰、午间、晚高峰、夜间统计近7天和近30天的最高分贝与超标次数，点击格子查看对应记录</p>
+          <div id="locationDetailHeatmap"></div>
+        </div>
         <div class="location-detail-records">
           <h3>历史记录</h3>
           <div class="tableWrap">
@@ -2206,6 +2211,291 @@ function renderMonitoringPointsList() {
   });
 }
 
+const timePeriods = [
+  { key: 'morning', label: '早高峰', startHour: 7, endHour: 9 },
+  { key: 'noon', label: '午间', startHour: 11, endHour: 13 },
+  { key: 'evening', label: '晚高峰', startHour: 17, endHour: 19 },
+  { key: 'night', label: '夜间', startHour: 22, endHour: 6 }
+];
+
+const timeRanges = [
+  { key: '7d', label: '近7天', days: 7 },
+  { key: '30d', label: '近30天', days: 30 }
+];
+
+function getTimePeriodKey(hour) {
+  for (const period of timePeriods) {
+    if (period.key === 'night') {
+      if (hour >= period.startHour || hour < period.endHour) {
+        return period.key;
+      }
+    } else {
+      if (hour >= period.startHour && hour < period.endHour) {
+        return period.key;
+      }
+    }
+  }
+  return null;
+}
+
+function getTimePeriodLabel(key) {
+  const period = timePeriods.find(p => p.key === key);
+  return period ? period.label : key;
+}
+
+function getRecordsWithinDays(records, days, pointId = null, location = null) {
+  const now = new Date();
+  const cutoff = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+  const cutoffStr = cutoff.toISOString().slice(0, 16);
+  return records.filter(r => {
+    if (r.at < cutoffStr) return false;
+    if (pointId && r.monitoringPointId !== pointId) return false;
+    if (location && !pointId && r.location !== location) return false;
+    return true;
+  });
+}
+
+function computeHeatmapData(pointId = null, location = null) {
+  const result = {};
+  for (const range of timeRanges) {
+    result[range.key] = {};
+    for (const period of timePeriods) {
+      result[range.key][period.key] = {
+        maxDb: null,
+        exceedCount: 0,
+        recordCount: 0,
+        recordIds: []
+      };
+    }
+    const rangeRecords = getRecordsWithinDays(records, range.days, pointId, location);
+    rangeRecords.forEach(r => {
+      const hour = new Date(r.at).getHours();
+      const periodKey = getTimePeriodKey(hour);
+      if (!periodKey) return;
+      const cell = result[range.key][periodKey];
+      cell.recordCount++;
+      cell.recordIds.push(r.id);
+      if (cell.maxDb === null || r.db > cell.maxDb) {
+        cell.maxDb = r.db;
+      }
+      if (r.db >= thresholds.highNoise) {
+        cell.exceedCount++;
+      }
+    });
+  }
+  return result;
+}
+
+function getHeatmapColor(maxDb, exceedCount) {
+  if (maxDb === null) return '#e2e8f0';
+  if (exceedCount === 0) {
+    if (maxDb >= thresholds.highNoise) return '#fde68a';
+    return '#bbf7d0';
+  }
+  if (maxDb >= thresholds.harsh) return '#fecaca';
+  if (maxDb >= thresholds.highNoise) return '#fed7aa';
+  if (exceedCount >= 3) return '#fecaca';
+  if (exceedCount >= 1) return '#fed7aa';
+  return '#bbf7d0';
+}
+
+function drawHeatmap(selector, heatmapData, pointId = null, location = null) {
+  const el = document.querySelector(selector);
+  if (!el) return;
+
+  const cellWidth = 140;
+  const cellHeight = 80;
+  const headerWidth = 90;
+  const headerHeight = 48;
+  const padding = 10;
+
+  const totalWidth = headerWidth + timeRanges.length * cellWidth + padding * 2;
+  const totalHeight = headerHeight + timePeriods.length * cellHeight + padding * 2;
+
+  let svg = `<svg viewBox="0 0 ${totalWidth} ${totalHeight}" style="width:100%;min-height:${totalHeight}px;">`;
+
+  svg += `<text x="${padding}" y="${padding + 20}" fill="#79695e" font-size="13" text-anchor="start" font-weight="600">时段</text>`;
+  timeRanges.forEach((range, ri) => {
+    const x = headerWidth + padding + ri * cellWidth + cellWidth / 2;
+    svg += `<text x="${x}" y="${padding + 20}" fill="#79695e" font-size="13" text-anchor="middle" font-weight="600">${range.label}</text>`;
+  });
+
+  svg += `<line x1="${padding}" y1="${headerHeight - 4}" x2="${totalWidth - padding}" y2="${headerHeight - 4}" stroke="#e2e8f0" stroke-width="1"/>`;
+
+  timePeriods.forEach((period, pi) => {
+    const y = headerHeight + padding + pi * cellHeight;
+    svg += `<text x="${padding + 8}" y="${y + cellHeight / 2 + 5}" fill="#251e1a" font-size="13" text-anchor="start" font-weight="600">${period.label}</text>`;
+    svg += `<text x="${padding + 8}" y="${y + cellHeight / 2 + 22}" fill="#94a3b8" font-size="10" text-anchor="start">${period.key === 'night' ? `${String(period.startHour).padStart(2, '0')}:00-${String(period.endHour).padStart(2, '0')}:00` : `${String(period.startHour).padStart(2, '0')}:00-${String(period.endHour).padStart(2, '0')}:00`}</text>`;
+
+    timeRanges.forEach((range, ri) => {
+      const x = headerWidth + padding + ri * cellWidth + 8;
+      const cell = heatmapData[range.key][period.key];
+      const bgColor = getHeatmapColor(cell.maxDb, cell.exceedCount);
+      const borderColor = cell.maxDb !== null && cell.maxDb >= thresholds.harsh ? '#dc2626' : '#e2e8f0';
+      const isClickable = cell.recordCount > 0;
+
+      svg += `<g class="heatmap-cell" style="${isClickable ? 'cursor:pointer;' : ''}" data-heat-point-id="${pointId || ''}" data-heat-location="${location || ''}" data-heat-range="${range.key}" data-heat-period="${period.key}">`;
+      svg += `<rect x="${x}" y="${y}" width="${cellWidth - 16}" height="${cellHeight - 8}" rx="6" ry="6" style="fill:${bgColor};stroke:${borderColor};stroke-width:${cell.maxDb !== null && cell.maxDb >= thresholds.harsh ? 2 : 1};"/>`;
+
+      if (cell.maxDb !== null) {
+        const dbColor = cell.maxDb >= thresholds.harsh ? '#dc2626' : (cell.maxDb >= thresholds.highNoise ? '#ea580c' : '#251e1a');
+        svg += `<text x="${x + (cellWidth - 16) / 2}" y="${y + 28}" fill="${dbColor}" font-size="18" text-anchor="middle" font-weight="700">${cell.maxDb}dB</text>`;
+      } else {
+        svg += `<text x="${x + (cellWidth - 16) / 2}" y="${y + 28}" fill="#94a3b8" font-size="14" text-anchor="middle">—</text>`;
+      }
+
+      if (cell.exceedCount > 0) {
+        const exceedColor = cell.exceedCount >= 3 ? '#dc2626' : '#ea580c';
+        svg += `<text x="${x + (cellWidth - 16) / 2}" y="${y + 52}" fill="${exceedColor}" font-size="11" text-anchor="middle" font-weight="600">超标 ${cell.exceedCount} 次</text>`;
+      } else if (cell.recordCount > 0) {
+        svg += `<text x="${x + (cellWidth - 16) / 2}" y="${y + 52}" fill="#059669" font-size="11" text-anchor="middle">无超标</text>`;
+      } else {
+        svg += `<text x="${x + (cellWidth - 16) / 2}" y="${y + 52}" fill="#94a3b8" font-size="11" text-anchor="middle">无数据</text>`;
+      }
+
+      svg += `</g>`;
+    });
+  });
+
+  svg += `</svg>`;
+
+  svg += `<div class="heatmap-legend">`;
+  svg += `<span class="heatmap-legend-title">图例：</span>`;
+  svg += `<span class="heatmap-legend-item"><span style="background:#bbf7d0;"></span>正常</span>`;
+  svg += `<span class="heatmap-legend-item"><span style="background:#fde68a;"></span>临界</span>`;
+  svg += `<span class="heatmap-legend-item"><span style="background:#fed7aa;"></span>超标</span>`;
+  svg += `<span class="heatmap-legend-item"><span style="background:#fecaca;border:2px solid #dc2626;"></span>刺耳</span>`;
+  svg += `<span class="heatmap-legend-item"><span style="background:#e2e8f0;"></span>无数据</span>`;
+  svg += `</div>`;
+
+  el.innerHTML = svg;
+
+  el.querySelectorAll('.heatmap-cell').forEach(g => {
+    const range = g.dataset.heatRange;
+    const period = g.dataset.heatPeriod;
+    const pId = g.dataset.heatPointId || null;
+    const loc = g.dataset.heatLocation || null;
+    const cellData = heatmapData[range]?.[period];
+    if (cellData && cellData.recordCount > 0) {
+      g.addEventListener('click', () => {
+        navigateToRecords(range, period, pId, loc);
+      });
+    }
+  });
+}
+
+function navigateToRecords(rangeKey, periodKey, pointId, location) {
+  const range = timeRanges.find(r => r.key === rangeKey);
+  const period = timePeriods.find(p => p.key === periodKey);
+  if (!range || !period) return;
+
+  const now = new Date();
+  const cutoff = new Date(now.getTime() - range.days * 24 * 60 * 60 * 1000);
+  currentFilters.dateStart = cutoff.toISOString().slice(0, 10);
+  currentFilters.dateEnd = now.toISOString().slice(0, 10);
+  currentFilters.highNoiseStatus = 'all';
+  currentFilters.sources = [];
+  currentFilters.feelings = [];
+  currentFilters.dbMin = '';
+  currentFilters.dbMax = '';
+  currentFilters.locations = location ? [location] : [];
+  activeViewId = null;
+
+  if (pointId) {
+    selectedMonitoringPointFilter = pointId;
+  }
+
+  const periodRecords = getRecordsWithinDays(records, range.days, pointId, location).filter(r => {
+    const hour = new Date(r.at).getHours();
+    return getTimePeriodKey(hour) === periodKey;
+  });
+
+  document.querySelector('#locationDetailOverlay').classList.add('hidden');
+  document.querySelector('#healthDashboardOverlay').classList.add('hidden');
+  document.querySelector('#monitoringPointOverlay').classList.add('hidden');
+  document.body.style.overflow = '';
+
+  updateFilterUI();
+  render();
+
+  if (periodRecords.length > 0) {
+    const rowsEl = document.querySelector('#rows');
+    if (rowsEl) {
+      rowsEl.scrollIntoView({ behavior: 'smooth' });
+    }
+    const msg = `${range.label} · ${period.label} · 共 ${periodRecords.length} 条记录`;
+    const banner = document.createElement('div');
+    banner.className = 'heatmap-filter-banner';
+    banner.innerHTML = `<span>🔍 时段筛选：${msg}</span><button class="heatmap-filter-close" id="heatmapFilterClose">&times;</button>`;
+    banner.style.cssText = 'position:sticky;top:0;z-index:100;background:#fef3c7;border:1px solid #f59e0b;border-radius:6px;padding:10px 14px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;';
+    const closeBtnStyle = 'background:none;border:none;font-size:20px;cursor:pointer;color:#92400e;line-height:1;padding:0 4px;';
+    const filterPanel = document.querySelector('#filterPanel');
+    if (filterPanel && !document.querySelector('.heatmap-filter-banner')) {
+      filterPanel.insertAdjacentElement('afterend', banner);
+      setTimeout(() => {
+        const closeBtn = document.querySelector('#heatmapFilterClose');
+        if (closeBtn) {
+          closeBtn.style.cssText = closeBtnStyle;
+          closeBtn.addEventListener('click', () => banner.remove());
+        }
+      }, 10);
+    }
+  }
+}
+
+function drawCompactHeatmap(containerEl, heatmapData, pointId, location) {
+  const cellSize = 28;
+  const labelWidth = 52;
+  const totalWidth = labelWidth + timeRanges.length * cellSize;
+  const totalHeight = timePeriods.length * cellSize + 20;
+
+  let svg = `<svg viewBox="0 0 ${totalWidth} ${totalHeight}" style="width:100%;height:${totalHeight}px;">`;
+
+  timeRanges.forEach((range, ri) => {
+    svg += `<text x="${labelWidth + ri * cellSize + cellSize / 2}" y="14" fill="#79695e" font-size="10" text-anchor="middle">${range.label.replace('近', '')}</text>`;
+  });
+
+  timePeriods.forEach((period, pi) => {
+    const y = 20 + pi * cellSize + 2;
+    svg += `<text x="4" y="${y + cellSize / 2 + 3}" fill="#64748b" font-size="10" text-anchor="start">${period.label}</text>`;
+
+    timeRanges.forEach((range, ri) => {
+      const x = labelWidth + ri * cellSize + 2;
+      const cell = heatmapData[range.key][period.key];
+      const bgColor = getHeatmapColor(cell.maxDb, cell.exceedCount);
+      const isClickable = cell.recordCount > 0;
+      const borderColor = cell.maxDb !== null && cell.maxDb >= thresholds.harsh ? '#dc2626' : '#e2e8f0';
+
+      svg += `<g class="compact-heat-cell" style="${isClickable ? 'cursor:pointer;' : ''}" data-heat-point-id="${pointId || ''}" data-heat-location="${location || ''}" data-heat-range="${range.key}" data-heat-period="${period.key}">`;
+      svg += `<rect x="${x}" y="${y}" width="${cellSize - 4}" height="${cellSize - 4}" rx="3" ry="3" style="fill:${bgColor};stroke:${borderColor};stroke-width:${cell.maxDb !== null && cell.maxDb >= thresholds.harsh ? 1.5 : 0.5};"/>`;
+      if (cell.exceedCount > 0) {
+        const ec = cell.exceedCount > 9 ? '9+' : cell.exceedCount;
+        svg += `<text x="${x + (cellSize - 4) / 2}" y="${y + (cellSize - 4) / 2 + 4}" fill="${cell.exceedCount >= 3 ? '#dc2626' : '#ea580c'}" font-size="10" text-anchor="middle" font-weight="700">${ec}</text>`;
+      } else if (cell.maxDb !== null) {
+        svg += `<text x="${x + (cellSize - 4) / 2}" y="${y + (cellSize - 4) / 2 + 4}" fill="#64748b" font-size="9" text-anchor="middle">${cell.maxDb}</text>`;
+      }
+      svg += `</g>`;
+    });
+  });
+
+  svg += `</svg>`;
+  containerEl.innerHTML = svg;
+
+  containerEl.querySelectorAll('.compact-heat-cell').forEach(g => {
+    const range = g.dataset.heatRange;
+    const period = g.dataset.heatPeriod;
+    const pId = g.dataset.heatPointId || null;
+    const loc = g.dataset.heatLocation || null;
+    const cellData = heatmapData[range]?.[period];
+    if (cellData && cellData.recordCount > 0) {
+      g.addEventListener('click', (e) => {
+        e.stopPropagation();
+        navigateToRecords(range, period, pId, loc);
+      });
+    }
+  });
+}
+
 function getNoiseLevel(db) {
   if (db >= thresholds.harsh) return 'harsh';
   if (db >= thresholds.highNoise) return 'high';
@@ -2577,6 +2867,9 @@ function openLocationDetail(location, pointId = null) {
       </tr>
     `;
   }
+
+  const heatmapData = computeHeatmapData(point?.id || null, point ? null : location);
+  drawHeatmap('#locationDetailHeatmap', heatmapData, point?.id || null, point ? null : location);
 
   document.querySelector('#locationDetailOverlay').classList.remove('hidden');
   document.body.style.overflow = 'hidden';
@@ -4302,10 +4595,13 @@ function renderHealthDashboard() {
             <span class="health-stat-name">7天最高分贝</span>
             <span class="health-stat-val">${h.maxDb7d !== null ? h.maxDb7d + 'dB' : '--'}</span>
           </div>
-          <div class="health-point-stat">
-            <span class="health-stat-name">数据状态</span>
-            <span class="health-stat-val">${statusIcon} ${statusLabel}</span>
+        </div>
+        <div class="health-point-heatmap">
+          <div class="health-heatmap-header">
+            <span class="health-heatmap-title">🔥 时段热力</span>
+            <span class="health-heatmap-hint">点击格子查看记录</span>
           </div>
+          <div class="health-heatmap-container" id="healthHeatmap-${h.point.id}"></div>
         </div>
         <div class="health-point-footer">
           <span class="health-point-district">📍 ${h.point.district}</span>
@@ -4317,6 +4613,14 @@ function renderHealthDashboard() {
       </div>
     `;
   }).join('');
+
+  healthData.forEach(h => {
+    const container = document.querySelector(`#healthHeatmap-${h.point.id}`);
+    if (container) {
+      const heatmapData = computeHeatmapData(h.point.id, null);
+      drawCompactHeatmap(container, heatmapData, h.point.id, null);
+    }
+  });
 
   listEl.querySelectorAll('[data-health-detail]').forEach(btn => {
     btn.addEventListener('click', () => {

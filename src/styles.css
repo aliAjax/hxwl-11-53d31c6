@@ -939,6 +939,7 @@ button:disabled {
   .location-detail-header,
   .location-detail-stats,
   .location-detail-chart,
+  .location-detail-heatmap,
   .location-detail-records {
     padding-left: 16px;
     padding-right: 16px;
@@ -4316,5 +4317,131 @@ button:disabled {
 
   .import-batch-actions button {
     width: 100%;
+  }
+}
+
+.location-detail-heatmap {
+  padding: 0 24px 20px;
+}
+
+.location-detail-heatmap h3 {
+  font-size: 16px;
+  color: #251e1a;
+  margin: 0 0 8px 0;
+  border-left: 4px solid #d94636;
+  padding-left: 12px;
+}
+
+.heatmap-hint {
+  font-size: 12px;
+  color: #79695e;
+  margin: 0 0 12px 0;
+}
+
+#locationDetailHeatmap {
+  background: #fffdfb;
+  border: 1px solid #dfd3c5;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.heatmap-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #eee4db;
+  align-items: center;
+}
+
+.heatmap-legend-title {
+  font-size: 12px;
+  color: #79695e;
+  font-weight: 600;
+}
+
+.heatmap-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #6e625a;
+}
+
+.heatmap-legend-item span {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  border: 1px solid #e2e8f0;
+}
+
+.heatmap-cell:hover rect {
+  filter: brightness(0.95);
+}
+
+.health-point-heatmap {
+  margin: 10px 0 12px;
+  padding: 10px 12px;
+  background: #fffdfb;
+  border: 1px solid #eee4db;
+  border-radius: 6px;
+}
+
+.health-heatmap-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.health-heatmap-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #251e1a;
+}
+
+.health-heatmap-hint {
+  font-size: 10px;
+  color: #94a3b8;
+}
+
+.health-heatmap-container svg {
+  min-height: auto;
+}
+
+.compact-heat-cell:hover rect {
+  filter: brightness(0.95);
+}
+
+.heatmap-filter-banner {
+  font-weight: 600;
+  color: #92400e;
+  font-size: 14px;
+}
+
+@media (max-width: 768px) {
+  .location-detail-heatmap {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  #locationDetailHeatmap {
+    overflow-x: auto;
+  }
+
+  #locationDetailHeatmap svg {
+    min-width: 360px;
+  }
+}
+
+@media (max-width: 480px) {
+  .heatmap-legend {
+    gap: 8px 12px;
+  }
+
+  .heatmap-legend-item {
+    font-size: 11px;
   }
 }
