@@ -66,7 +66,8 @@ const defaultAlarmConfig = {
   multipleExceedThreshold: 3,
   nightStartHour: 22,
   nightEndHour: 6,
-  nightNoiseThreshold: 65
+  nightNoiseThreshold: 65,
+  mergeTimeWindowHours: 2
 };
 
 let records = JSON.parse(localStorage.getItem(key) || 'null') || seed;
@@ -615,6 +616,11 @@ document.querySelector('#app').innerHTML = `
                 <input type="number" id="nightNoiseThreshold" min="20" max="130" />
                 <span class="rule-desc">夜间时段超过此值即告警（dB）</span>
               </div>
+              <div class="rule-item">
+                <label>合并时间窗口</label>
+                <input type="number" id="mergeTimeWindowHours" min="0.5" max="24" step="0.5" />
+                <span class="rule-desc">同地点同日相邻告警时间差 ≤ 此值（小时）才合并</span>
+              </div>
             </div>
             <div class="alarm-config-actions">
               <button class="secondary" id="resetAlarmConfig">恢复默认</button>
@@ -1156,6 +1162,7 @@ document.querySelector('#saveAlarmConfig').addEventListener('click', () => {
   const nightStartHour = parseInt(document.querySelector('#nightStartHour').value);
   const nightEndHour = parseInt(document.querySelector('#nightEndHour').value);
   const nightNoiseThreshold = parseInt(document.querySelector('#nightNoiseThreshold').value);
+  const mergeTimeWindowHours = parseFloat(document.querySelector('#mergeTimeWindowHours').value);
 
   if (isNaN(multipleExceedThreshold) || multipleExceedThreshold < 2 || multipleExceedThreshold > 10) {
     alert('日内多次超标阈值必须在2-10之间');
@@ -1173,8 +1180,12 @@ document.querySelector('#saveAlarmConfig').addEventListener('click', () => {
     alert('夜间噪声阈值必须在20-130之间');
     return;
   }
+  if (isNaN(mergeTimeWindowHours) || mergeTimeWindowHours < 0.5 || mergeTimeWindowHours > 24) {
+    alert('合并时间窗口必须在0.5-24小时之间');
+    return;
+  }
 
-  alarmConfig = { multipleExceedThreshold, nightStartHour, nightEndHour, nightNoiseThreshold };
+  alarmConfig = { multipleExceedThreshold, nightStartHour, nightEndHour, nightNoiseThreshold, mergeTimeWindowHours };
   saveAlarmConfig();
   recalculateAlarms();
   renderAlarmCenter();
@@ -1860,46 +1871,78 @@ function getMergedAlarmTypes(alarmList) {
 }
 
 function mergeAlarmsByLocationAndDay(alarmList) {
-  const groups = new Map();
+  const timeWindowMs = (alarmConfig.mergeTimeWindowHours || 2) * 60 * 60 * 1000;
+  const locationDayGroups = new Map();
 
   alarmList.forEach(alarm => {
     const day = getAlarmDay(alarm);
     const key = `${alarm.location}__${day}`;
-    if (!groups.has(key)) {
-      groups.set(key, []);
+    if (!locationDayGroups.has(key)) {
+      locationDayGroups.set(key, []);
     }
-    groups.get(key).push(alarm);
+    locationDayGroups.get(key).push(alarm);
   });
 
   const mergedEvents = [];
-  groups.forEach((groupAlarms, key) => {
+
+  locationDayGroups.forEach((groupAlarms, key) => {
     const [location, day] = key.split('__');
     const sortedAlarms = [...groupAlarms].sort((a, b) => {
-      const timeA = a.at || a.day;
-      const timeB = b.at || b.day;
-      return new Date(timeB) - new Date(timeA);
+      const timeA = new Date(a.at || a.day).getTime();
+      const timeB = new Date(b.at || b.day).getTime();
+      return timeA - timeB;
     });
 
-    const maxDb = Math.max(...groupAlarms.map(a => a.db || a.maxDb || 0));
-    const types = getMergedAlarmTypes(groupAlarms);
-    const status = getMergedAlarmStatus(groupAlarms);
-    const earliestAt = sortedAlarms[sortedAlarms.length - 1].at || sortedAlarms[sortedAlarms.length - 1].day;
-    const latestAt = sortedAlarms[0].at || sortedAlarms[0].day;
-    const hasPatrolTask = groupAlarms.some(a => a.patrolTaskId);
+    const timeWindows = [];
+    let currentWindow = [sortedAlarms[0]];
 
-    mergedEvents.push({
-      id: `merged-${key}`,
-      key,
-      location,
-      day,
-      alarms: sortedAlarms,
-      alarmCount: sortedAlarms.length,
-      types,
-      status,
-      maxDb,
-      earliestAt,
-      latestAt,
-      hasPatrolTask
+    for (let i = 1; i < sortedAlarms.length; i++) {
+      const prevTime = new Date(sortedAlarms[i - 1].at || sortedAlarms[i - 1].day).getTime();
+      const currTime = new Date(sortedAlarms[i].at || sortedAlarms[i].day).getTime();
+
+      if (currTime - prevTime <= timeWindowMs) {
+        currentWindow.push(sortedAlarms[i]);
+      } else {
+        timeWindows.push(currentWindow);
+        currentWindow = [sortedAlarms[i]];
+      }
+    }
+    timeWindows.push(currentWindow);
+
+    timeWindows.forEach((windowAlarms, windowIndex) => {
+      const windowSorted = [...windowAlarms].sort((a, b) => {
+        const timeA = new Date(a.at || a.day).getTime();
+        const timeB = new Date(b.at || b.day).getTime();
+        return timeB - timeA;
+      });
+
+      const maxDb = Math.max(...windowAlarms.map(a => a.db || a.maxDb || 0));
+      const types = getMergedAlarmTypes(windowAlarms);
+      const status = getMergedAlarmStatus(windowAlarms);
+      const earliestAt = windowSorted[windowSorted.length - 1].at || windowSorted[windowSorted.length - 1].day;
+      const latestAt = windowSorted[0].at || windowSorted[0].day;
+      const hasPatrolTask = windowAlarms.some(a => a.patrolTaskId);
+
+      const windowId = timeWindows.length > 1
+        ? `merged-${key}-w${windowIndex}`
+        : `merged-${key}`;
+
+      mergedEvents.push({
+        id: windowId,
+        key: timeWindows.length > 1 ? `${key}-w${windowIndex}` : key,
+        location,
+        day,
+        alarms: windowSorted,
+        alarmCount: windowSorted.length,
+        types,
+        status,
+        maxDb,
+        earliestAt,
+        latestAt,
+        hasPatrolTask,
+        windowIndex: timeWindows.length > 1 ? windowIndex + 1 : null,
+        totalWindows: timeWindows.length > 1 ? timeWindows.length : null
+      });
     });
   });
 
@@ -3127,6 +3170,7 @@ function loadAlarmConfig() {
   document.querySelector('#nightStartHour').value = alarmConfig.nightStartHour;
   document.querySelector('#nightEndHour').value = alarmConfig.nightEndHour;
   document.querySelector('#nightNoiseThreshold').value = alarmConfig.nightNoiseThreshold;
+  document.querySelector('#mergeTimeWindowHours').value = alarmConfig.mergeTimeWindowHours || 2;
   document.querySelector('#alarmStatusFilter').value = alarmStatusFilter;
   document.querySelector('#alarmTypeFilter').value = alarmTypeFilter;
   document.querySelector('#alarmViewModeSelect').value = alarmViewMode;
@@ -3238,6 +3282,10 @@ function renderMergedAlarmCard(mergedEvent) {
     ? `${mergedEvent.earliestAt.slice(5, 16).replace('T', ' ')} ~ ${mergedEvent.latestAt.slice(5, 16).replace('T', ' ')}`
     : mergedEvent.day;
 
+  const windowLabel = mergedEvent.totalWindows
+    ? `（时段${mergedEvent.windowIndex}/${mergedEvent.totalWindows}）`
+    : '';
+
   const expandIcon = isExpanded ? '▼' : '▶';
 
   let innerAlarmsHtml = '';
@@ -3288,7 +3336,7 @@ function renderMergedAlarmCard(mergedEvent) {
         <div class="merged-alarm-main">
           <div class="merged-alarm-title">
             <span class="merged-alarm-location">${mergedEvent.location}</span>
-            <span class="merged-alarm-count">${mergedEvent.alarmCount} 条告警</span>
+            <span class="merged-alarm-count">${mergedEvent.alarmCount} 条告警${windowLabel}</span>
           </div>
           <div class="merged-alarm-types">
             ${typeBadges}
