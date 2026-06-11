@@ -28,8 +28,24 @@ const patrolStatusLabels = {
   pending: '待巡查',
   in_progress: '巡查中',
   completed: '已完成',
-  cancelled: '已取消'
+  cancelled: '已取消',
+  expiring_soon: '即将到期',
+  overdue: '已逾期'
 };
+
+const PATROL_EXPIRING_HOURS = 2;
+
+function getPatrolTimeStatus(task) {
+  if (task.status === 'completed' || task.status === 'cancelled') return task.status;
+  if (!task.scheduledAt) return task.status;
+  const now = new Date();
+  const scheduled = new Date(task.scheduledAt);
+  const diffMs = scheduled.getTime() - now.getTime();
+  const diffHours = diffMs / (1000 * 60 * 60);
+  if (diffMs < 0) return 'overdue';
+  if (diffHours <= PATROL_EXPIRING_HOURS) return 'expiring_soon';
+  return task.status;
+}
 
 const seed = [
   { id: crypto.randomUUID(), location: '老城菜市口', at: '2026-06-05T07:40', db: 76, source: '叫卖与卸货', feeling: '嘈杂', monitoringPointId: null },
@@ -104,6 +120,8 @@ let patrolTasks = JSON.parse(localStorage.getItem(patrolTasksKey) || 'null') || 
 let editingPatrolTaskId = null;
 let patrolTaskStatusFilter = 'all';
 let patrolTaskPointFilter = '';
+let patrolSortMode = 'status';
+let patrolCompletingTaskId = null;
 
 let complaints = JSON.parse(localStorage.getItem(complaintsKey) || 'null') || defaultComplaints;
 let editingComplaintId = null;
@@ -159,7 +177,10 @@ document.querySelector('#app').innerHTML = `
       </div>
       <div class="topButtons">
         <button id="complaintBtn">投诉登记</button>
-        <button id="patrolTasksBtn">巡查任务</button>
+        <button id="patrolTasksBtn" class="nav-btn-with-badge">
+          巡查任务
+          <span class="nav-badge hidden" id="patrolNavBadge">0</span>
+        </button>
         <button id="healthDashboardBtn">健康看板</button>
         <button id="alarmCenterBtn">告警中心</button>
         <button id="monitoringPointsBtn">监测点管理</button>
@@ -688,6 +709,14 @@ document.querySelector('#app').innerHTML = `
               <span class="patrol-stat-label">巡查中</span>
               <strong class="patrol-stat-value" id="patrolInProgressCount">0</strong>
             </div>
+            <div class="patrol-stat-card expiring-soon">
+              <span class="patrol-stat-label">即将到期</span>
+              <strong class="patrol-stat-value" id="patrolExpiringSoonCount">0</strong>
+            </div>
+            <div class="patrol-stat-card overdue">
+              <span class="patrol-stat-label">已逾期</span>
+              <strong class="patrol-stat-value" id="patrolOverdueCount">0</strong>
+            </div>
             <div class="patrol-stat-card completed">
               <span class="patrol-stat-label">已完成</span>
               <strong class="patrol-stat-value" id="patrolCompletedCount">0</strong>
@@ -705,6 +734,8 @@ document.querySelector('#app').innerHTML = `
                 <option value="all">全部状态</option>
                 <option value="pending">待巡查</option>
                 <option value="in_progress">巡查中</option>
+                <option value="expiring_soon">即将到期</option>
+                <option value="overdue">已逾期</option>
                 <option value="completed">已完成</option>
                 <option value="cancelled">已取消</option>
               </select>
@@ -713,6 +744,14 @@ document.querySelector('#app').innerHTML = `
               <label>监测点筛选：</label>
               <select id="patrolPointFilter">
                 <option value="">全部监测点</option>
+              </select>
+            </div>
+            <div class="filter-group">
+              <label>排序：</label>
+              <select id="patrolSortSelect">
+                <option value="status">按状态排序</option>
+                <option value="scheduled_asc">计划时间 ↑</option>
+                <option value="scheduled_desc">计划时间 ↓</option>
               </select>
             </div>
             <button class="primary" id="newPatrolTaskBtn">+ 新建任务</button>
@@ -934,6 +973,30 @@ document.querySelector('#app').innerHTML = `
             <div id="importBatchesList" class="import-batches-list"></div>
           </div>
         </div>
+      </div>
+    </div>
+
+    <div class="patrol-complete-overlay hidden" id="patrolCompleteOverlay">
+      <div class="patrol-complete-panel">
+        <div class="patrol-complete-header">
+          <h2>完成巡查任务</h2>
+          <button class="patrol-complete-close" id="patrolCompleteClose">&times;</button>
+        </div>
+        <form id="patrolCompleteForm" class="patrol-complete-form">
+          <div class="patrol-complete-info" id="patrolCompleteInfo"></div>
+          <div class="patrol-complete-field">
+            <label>实际巡查时间 <span style="color:#d94636">*</span></label>
+            <input name="actualTime" type="datetime-local" id="patrolCompleteTime" required />
+          </div>
+          <div class="patrol-complete-field">
+            <label>处理结果 <span style="color:#d94636">*</span></label>
+            <textarea name="result" id="patrolCompleteResult" placeholder="请填写巡查处理结果，如：已现场核实、已整改、需后续跟进等" rows="4" required></textarea>
+          </div>
+          <div class="patrol-complete-actions">
+            <button type="button" class="secondary" id="patrolCompleteCancel">取消</button>
+            <button type="submit" class="primary">确认完成</button>
+          </div>
+        </form>
       </div>
     </div>
 
@@ -3258,10 +3321,15 @@ function renderAlarmCard(alarm) {
     if (task) {
       const taskStatusLabel = patrolStatusLabels[task.status] || '未知';
       const taskStatusClass = `patrol-status-${task.status}`;
+      const taskTimeStatus = getPatrolTimeStatus(task);
+      const isTaskOverdue = taskTimeStatus === 'overdue';
+      const isTaskExpiringSoon = taskTimeStatus === 'expiring_soon';
+      const overdueTag = isTaskOverdue ? '<span class="patrol-time-status-tag patrol-time-overdue" style="margin-left:8px;">⏰ 已逾期</span>' : (isTaskExpiringSoon ? '<span class="patrol-time-status-tag patrol-time-expiring-soon" style="margin-left:8px;">⏳ 即将到期</span>' : '');
       patrolTaskInfo = `
-          <div class="alarm-patrol-info">
+          <div class="alarm-patrol-info ${isTaskOverdue ? 'alarm-patrol-overdue' : ''}">
             <span class="alarm-patrol-label">🔗 关联巡查任务：</span>
             <span class="patrol-status-badge ${taskStatusClass}">${taskStatusLabel}</span>
+            ${overdueTag}
             <span class="alarm-patrol-task">${task.location} · ${task.assignee}</span>
             <button class="secondary alarm-patrol-view-btn" data-view-patrol="${task.id}">查看任务</button>
           </div>
@@ -3388,7 +3456,17 @@ function renderMergedAlarmCard(mergedEvent) {
           <div class="merged-alarm-meta">
             <span class="merged-alarm-time">📅 ${timeRange}</span>
             <span class="merged-alarm-maxdb">🔊 最高 ${mergedEvent.maxDb}dB</span>
-            ${mergedEvent.hasPatrolTask ? '<span class="merged-alarm-patrol">🔗 已关联巡查</span>' : ''}
+            ${mergedEvent.hasPatrolTask ? (() => {
+              const relatedTask = mergedEvent.alarms
+                .map(a => a.patrolTaskId ? patrolTasks.find(t => t.id === a.patrolTaskId) : null)
+                .find(t => t);
+              if (relatedTask) {
+                const ts = getPatrolTimeStatus(relatedTask);
+                if (ts === 'overdue') return '<span class="merged-alarm-patrol merged-alarm-patrol-overdue">🔗 已关联巡查 ⏰已逾期</span>';
+                if (ts === 'expiring_soon') return '<span class="merged-alarm-patrol merged-alarm-patrol-expiring">🔗 已关联巡查 ⏳即将到期</span>';
+              }
+              return '<span class="merged-alarm-patrol">🔗 已关联巡查</span>';
+            })() : ''}
           </div>
         </div>
         <div class="merged-alarm-status-badge">
@@ -3513,6 +3591,8 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     if (!document.querySelector('#confirmOverlay').classList.contains('hidden')) {
       closeConfirmDialog();
+    } else if (!document.querySelector('#patrolCompleteOverlay').classList.contains('hidden')) {
+      closePatrolCompleteDialog();
     } else if (!document.querySelector('#viewSaveOverlay').classList.contains('hidden')) {
       closeSaveViewDialog();
     } else if (!document.querySelector('#complaintOverlay').classList.contains('hidden')) {
@@ -4126,6 +4206,16 @@ document.querySelector('#patrolPointFilter').addEventListener('change', (e) => {
   patrolTaskPointFilter = e.target.value;
   renderPatrolTasks();
 });
+document.querySelector('#patrolSortSelect').addEventListener('change', (e) => {
+  patrolSortMode = e.target.value;
+  renderPatrolTasks();
+});
+document.querySelector('#patrolCompleteClose').addEventListener('click', closePatrolCompleteDialog);
+document.querySelector('#patrolCompleteCancel').addEventListener('click', closePatrolCompleteDialog);
+document.querySelector('#patrolCompleteOverlay').addEventListener('click', (e) => {
+  if (e.target.id === 'patrolCompleteOverlay') closePatrolCompleteDialog();
+});
+document.querySelector('#patrolCompleteForm').addEventListener('submit', handlePatrolCompleteSubmit);
 
 patrolTaskForm.addEventListener('submit', handlePatrolFormSubmit);
 
@@ -4273,13 +4363,22 @@ function handlePatrolFormSubmit(event) {
     return;
   }
 
+  const existingTask = editingPatrolTaskId ? patrolTasks.find(t => t.id === editingPatrolTaskId) : null;
+
+  if (data.status === 'completed') {
+    if (!data.completedAt && !existingTask?.completedAt) {
+      alert('完成状态的任务请填写实际巡查时间，或通过"完成"按钮操作');
+      return;
+    }
+    if (!existingTask?.result) {
+      alert('完成状态的任务必须填写处理结果，请通过"完成"按钮操作');
+      return;
+    }
+  }
+
   const now = new Date();
   const nowIso = now.toISOString();
-  const completedAt = data.status === 'completed' && !data.completedAt
-    ? toLocalDateTimeInputValue(now)
-    : (data.completedAt || null);
-
-  const existingTask = editingPatrolTaskId ? patrolTasks.find(t => t.id === editingPatrolTaskId) : null;
+  const completedAt = data.completedAt || (existingTask?.completedAt || null);
   const sourceAlarmId = existingTask?.sourceAlarmId || _pendingAlarmToPatrol;
 
   const task = {
@@ -4291,6 +4390,7 @@ function handlePatrolFormSubmit(event) {
     status: data.status || 'pending',
     completedAt,
     notes: data.notes || '',
+    result: existingTask?.result || null,
     sourceAlarmId: sourceAlarmId || null,
     createdAt: editingPatrolTaskId ? (existingTask?.createdAt || nowIso) : nowIso,
     updatedAt: nowIso
@@ -4321,12 +4421,22 @@ function updatePatrolTaskStatus(taskId, newStatus) {
   const task = patrolTasks.find(t => t.id === taskId);
   const oldStatus = task?.status;
 
+  if (newStatus === 'completed' && (!task?.result || !task?.completedAt)) {
+    openPatrolCompleteDialog(taskId);
+    return;
+  }
+
   patrolTasks = patrolTasks.map(t => {
     if (t.id === taskId) {
-      const completedAt = newStatus === 'completed' && !t.completedAt
-        ? toLocalDateTimeInputValue(now)
-        : (newStatus !== 'completed' ? null : t.completedAt);
-      return { ...t, status: newStatus, completedAt, updatedAt: nowIso };
+      let completedAt = t.completedAt;
+      let result = t.result || null;
+      if (newStatus === 'completed') {
+        completedAt = completedAt || toLocalDateTimeInputValue(now);
+      } else {
+        completedAt = null;
+        result = null;
+      }
+      return { ...t, status: newStatus, completedAt, result, updatedAt: nowIso };
     }
     return t;
   });
@@ -4375,27 +4485,46 @@ function editPatrolTask(taskId) {
 }
 
 function renderPatrolTasks() {
+  const timeStatusMap = new Map(patrolTasks.map(t => [t.id, getPatrolTimeStatus(t)]));
   const pending = patrolTasks.filter(t => t.status === 'pending').length;
   const inProgress = patrolTasks.filter(t => t.status === 'in_progress').length;
   const completed = patrolTasks.filter(t => t.status === 'completed').length;
+  const expiringSoon = patrolTasks.filter(t => timeStatusMap.get(t.id) === 'expiring_soon').length;
+  const overdue = patrolTasks.filter(t => timeStatusMap.get(t.id) === 'overdue').length;
 
   document.querySelector('#patrolPendingCount').textContent = pending;
   document.querySelector('#patrolInProgressCount').textContent = inProgress;
+  document.querySelector('#patrolExpiringSoonCount').textContent = expiringSoon;
+  document.querySelector('#patrolOverdueCount').textContent = overdue;
   document.querySelector('#patrolCompletedCount').textContent = completed;
   document.querySelector('#patrolTotalCount').textContent = patrolTasks.length;
 
   let filtered = [...patrolTasks];
 
   if (patrolTaskStatusFilter !== 'all') {
-    filtered = filtered.filter(t => t.status === patrolTaskStatusFilter);
+    if (patrolTaskStatusFilter === 'expiring_soon') {
+      filtered = filtered.filter(t => timeStatusMap.get(t.id) === 'expiring_soon');
+    } else if (patrolTaskStatusFilter === 'overdue') {
+      filtered = filtered.filter(t => timeStatusMap.get(t.id) === 'overdue');
+    } else {
+      filtered = filtered.filter(t => t.status === patrolTaskStatusFilter);
+    }
   }
   if (patrolTaskPointFilter) {
     filtered = filtered.filter(t => t.monitoringPointId === patrolTaskPointFilter);
   }
 
   filtered.sort((a, b) => {
-    const statusOrder = { pending: 0, in_progress: 1, completed: 2, cancelled: 3 };
-    const sDiff = statusOrder[a.status] - statusOrder[b.status];
+    if (patrolSortMode === 'scheduled_asc') {
+      return (a.scheduledAt || '').localeCompare(b.scheduledAt || '');
+    }
+    if (patrolSortMode === 'scheduled_desc') {
+      return (b.scheduledAt || '').localeCompare(a.scheduledAt || '');
+    }
+    const statusPriority = { overdue: 0, expiring_soon: 1, pending: 2, in_progress: 3, completed: 4, cancelled: 5 };
+    const aP = statusPriority[timeStatusMap.get(a.id)] ?? 3;
+    const bP = statusPriority[timeStatusMap.get(b.id)] ?? 3;
+    const sDiff = aP - bP;
     if (sDiff !== 0) return sDiff;
     return new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt);
   });
@@ -4410,8 +4539,9 @@ function renderPatrolTasks() {
   listEl.innerHTML = filtered.map(task => {
     const point = task.monitoringPointId ? getMonitoringPointById(task.monitoringPointId) : null;
     const typeInfo = point ? getPointTypeInfo(point.type) : null;
-    const isOverdue = task.status !== 'completed' && task.status !== 'cancelled'
-      && new Date(task.scheduledAt) < new Date();
+    const timeStatus = timeStatusMap.get(task.id);
+    const isOverdue = timeStatus === 'overdue';
+    const isExpiringSoon = timeStatus === 'expiring_soon';
 
     let sourceAlarmInfo = '';
     if (task.sourceAlarmId) {
@@ -4435,15 +4565,25 @@ function renderPatrolTasks() {
       }
     }
 
+    let timeStatusTag = '';
+    if (isOverdue) {
+      timeStatusTag = '<span class="patrol-time-status-tag patrol-time-overdue">⏰ 已逾期</span>';
+    } else if (isExpiringSoon) {
+      timeStatusTag = '<span class="patrol-time-status-tag patrol-time-expiring-soon">⏳ 即将到期</span>';
+    }
+
+    const statusLabel = patrolStatusLabels[task.status] || '未知';
+    const statusBadgeClass = isOverdue ? 'patrol-status-overdue' : (isExpiringSoon ? 'patrol-status-expiring-soon' : `patrol-status-${task.status}`);
+
     return `
-      <div class="patrol-task-item patrol-status-${task.status} ${isOverdue ? 'patrol-overdue' : ''}">
+      <div class="patrol-task-item patrol-status-${task.status} ${isOverdue ? 'patrol-overdue' : ''} ${isExpiringSoon ? 'patrol-expiring-soon' : ''}">
         <div class="patrol-task-head">
           <div class="patrol-task-location">
             <strong>${task.location}</strong>
             ${point ? `<span class="point-type-badge ${typeInfo.colorClass}" style="margin-left:8px;">${typeInfo.label}</span>` : ''}
-            ${isOverdue ? '<span class="patrol-overdue-tag">已逾期</span>' : ''}
+            ${timeStatusTag}
           </div>
-          <span class="patrol-status-badge patrol-status-${task.status}">${patrolStatusLabels[task.status]}</span>
+          <span class="patrol-status-badge ${statusBadgeClass}">${statusLabel}</span>
         </div>
         <div class="patrol-task-info">
           <div class="patrol-info-row">
@@ -4457,6 +4597,7 @@ function renderPatrolTasks() {
         </div>
         ${sourceAlarmInfo}
         ${task.notes ? `<div class="patrol-task-notes">📝 ${escapeHtml(task.notes)}</div>` : ''}
+        ${task.result ? `<div class="patrol-task-result">📋 处理结果：${escapeHtml(task.result)}</div>` : ''}
         <div class="patrol-task-footer">
           <span class="patrol-task-time">创建于 ${new Date(task.createdAt).toLocaleString('zh-CN')}</span>
           <div class="patrol-task-actions">
@@ -4487,7 +4628,7 @@ function renderPatrolTasks() {
     btn.addEventListener('click', () => updatePatrolTaskStatus(btn.dataset.patrolStart, 'in_progress'));
   });
   listEl.querySelectorAll('[data-patrol-complete]').forEach(btn => {
-    btn.addEventListener('click', () => updatePatrolTaskStatus(btn.dataset.patrolComplete, 'completed'));
+    btn.addEventListener('click', () => openPatrolCompleteDialog(btn.dataset.patrolComplete));
   });
   listEl.querySelectorAll('[data-patrol-reopen]').forEach(btn => {
     btn.addEventListener('click', () => updatePatrolTaskStatus(btn.dataset.patrolReopen, 'pending'));
@@ -4507,6 +4648,192 @@ function renderPatrolTasks() {
       openAlarmCenter();
     });
   });
+
+  updatePatrolNavBadge();
+}
+
+function openPatrolCompleteDialog(taskId) {
+  const task = patrolTasks.find(t => t.id === taskId);
+  if (!task) return;
+  patrolCompletingTaskId = taskId;
+
+  const point = task.monitoringPointId ? getMonitoringPointById(task.monitoringPointId) : null;
+  const infoEl = document.querySelector('#patrolCompleteInfo');
+  infoEl.innerHTML = `
+    <div class="patrol-complete-task-summary">
+      <div class="patrol-complete-task-row"><strong>地点：</strong>${task.location}${point ? ` (${point.district})` : ''}</div>
+      <div class="patrol-complete-task-row"><strong>负责人：</strong>${task.assignee}</div>
+      <div class="patrol-complete-task-row"><strong>计划时间：</strong>${task.scheduledAt ? task.scheduledAt.replace('T', ' ') : '未设置'}</div>
+    </div>
+  `;
+
+  document.querySelector('#patrolCompleteTime').value = toLocalDateTimeInputValue();
+  document.querySelector('#patrolCompleteResult').value = '';
+  document.querySelector('#patrolCompleteOverlay').classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+}
+
+function closePatrolCompleteDialog() {
+  patrolCompletingTaskId = null;
+  document.querySelector('#patrolCompleteOverlay').classList.add('hidden');
+  document.body.style.overflow = '';
+}
+
+function handlePatrolCompleteSubmit(event) {
+  event.preventDefault();
+  if (!patrolCompletingTaskId) return;
+
+  const actualTime = document.querySelector('#patrolCompleteTime').value;
+  const result = document.querySelector('#patrolCompleteResult').value.trim();
+
+  if (!actualTime) {
+    alert('请填写实际巡查时间');
+    return;
+  }
+  if (!result) {
+    alert('请填写处理结果');
+    return;
+  }
+
+  const now = new Date();
+  const nowIso = now.toISOString();
+  const task = patrolTasks.find(t => t.id === patrolCompletingTaskId);
+
+  patrolTasks = patrolTasks.map(t => {
+    if (t.id === patrolCompletingTaskId) {
+      return { ...t, status: 'completed', completedAt: actualTime, result, updatedAt: nowIso };
+    }
+    return t;
+  });
+  savePatrolTasks();
+
+  if (task?.sourceAlarmId) {
+    if (!document.querySelector('#alarmCenterOverlay').classList.contains('hidden')) {
+      renderAlarmCenter();
+    }
+  }
+
+  closePatrolCompleteDialog();
+  renderPatrolTasks();
+  updatePatrolNavBadge();
+}
+
+function updatePatrolNavBadge() {
+  const badgeEl = document.querySelector('#patrolNavBadge');
+  if (!badgeEl) return;
+
+  const timeStatusMap = new Map(patrolTasks.map(t => [t.id, getPatrolTimeStatus(t)]));
+  const overdueCount = patrolTasks.filter(t => timeStatusMap.get(t.id) === 'overdue').length;
+  const expiringSoonCount = patrolTasks.filter(t => timeStatusMap.get(t.id) === 'expiring_soon').length;
+  const urgentCount = overdueCount + expiringSoonCount;
+
+  if (urgentCount > 0) {
+    badgeEl.textContent = urgentCount;
+    badgeEl.classList.remove('hidden');
+    badgeEl.classList.toggle('badge-overdue', overdueCount > 0);
+    badgeEl.classList.toggle('badge-expiring', overdueCount === 0 && expiringSoonCount > 0);
+  } else {
+    badgeEl.classList.add('hidden');
+  }
+}
+
+let patrolReminderTimer = null;
+const lastNotifiedTaskIds = new Set();
+
+function startPatrolReminderCheck() {
+  if (patrolReminderTimer) return;
+  patrolReminderTimer = setInterval(() => {
+    updatePatrolNavBadge();
+    checkPatrolReminders();
+    if (!document.querySelector('#patrolTasksOverlay').classList.contains('hidden')) {
+      renderPatrolTasks();
+    }
+    if (!document.querySelector('#alarmCenterOverlay').classList.contains('hidden')) {
+      renderAlarmCenter();
+    }
+  }, 60000);
+  updatePatrolNavBadge();
+}
+
+function checkPatrolReminders() {
+  const now = new Date();
+  const newlyOverdue = [];
+  const newlyExpiring = [];
+
+  patrolTasks.forEach(task => {
+    if (task.status === 'completed' || task.status === 'cancelled') return;
+    if (!task.scheduledAt) return;
+
+    const timeStatus = getPatrolTimeStatus(task);
+    const notifyKey = `${task.id}-${timeStatus}`;
+
+    if (lastNotifiedTaskIds.has(notifyKey)) return;
+
+    if (timeStatus === 'overdue') {
+      newlyOverdue.push(task);
+      lastNotifiedTaskIds.add(notifyKey);
+    } else if (timeStatus === 'expiring_soon') {
+      newlyExpiring.push(task);
+      lastNotifiedTaskIds.add(notifyKey);
+    }
+  });
+
+  if (newlyOverdue.length > 0 || newlyExpiring.length > 0) {
+    showPatrolReminderToast(newlyOverdue, newlyExpiring);
+  }
+}
+
+function showPatrolReminderToast(overdueTasks, expiringTasks) {
+  const existingToast = document.querySelector('#patrolReminderToast');
+  if (existingToast) existingToast.remove();
+
+  let message = '';
+  let type = 'info';
+
+  if (overdueTasks.length > 0) {
+    type = 'error';
+    message = `⚠️ 有 ${overdueTasks.length} 个巡查任务已逾期！`;
+    if (expiringTasks.length > 0) {
+      message += `\n⏳ 另有 ${expiringTasks.length} 个任务即将到期`;
+    }
+  } else if (expiringTasks.length > 0) {
+    type = 'warning';
+    message = `⏳ 有 ${expiringTasks.length} 个巡查任务即将到期`;
+  }
+
+  const toast = document.createElement('div');
+  toast.id = 'patrolReminderToast';
+  toast.className = `patrol-reminder-toast toast-${type}`;
+  toast.innerHTML = `
+    <div class="toast-content">
+      <span class="toast-message">${message.replace(/\n/g, '<br/>')}</span>
+      <button class="toast-close" id="patrolReminderClose">×</button>
+    </div>
+    <div class="toast-actions">
+      <button class="primary" id="patrolReminderView">查看任务</button>
+    </div>
+  `;
+  document.body.appendChild(toast);
+
+  setTimeout(() => toast.classList.add('show'), 10);
+
+  document.querySelector('#patrolReminderClose')?.addEventListener('click', () => {
+    toast.classList.remove('show');
+    setTimeout(() => toast.remove(), 300);
+  });
+
+  document.querySelector('#patrolReminderView')?.addEventListener('click', () => {
+    toast.classList.remove('show');
+    setTimeout(() => toast.remove(), 300);
+    openPatrolTasks();
+  });
+
+  setTimeout(() => {
+    if (document.body.contains(toast)) {
+      toast.classList.remove('show');
+      setTimeout(() => toast.remove(), 300);
+    }
+  }, 10000);
 }
 
 function escapeHtml(text) {
@@ -5016,3 +5343,4 @@ if (defaultViewId) {
 
 recalculateAlarms();
 render();
+startPatrolReminderCheck();
