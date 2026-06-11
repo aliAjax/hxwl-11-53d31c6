@@ -1866,6 +1866,44 @@ button:disabled {
   font-size: 13px;
 }
 
+.alarm-patrol-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 6px;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+
+.alarm-patrol-info.alarm-patrol-missing {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #991b1b;
+}
+
+.alarm-patrol-label {
+  font-weight: 600;
+  color: #1e40af;
+}
+
+.alarm-patrol-missing .alarm-patrol-label {
+  color: #991b1b;
+}
+
+.alarm-patrol-task {
+  color: #554a42;
+}
+
+.alarm-patrol-view-btn {
+  margin-left: auto;
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
 @media (max-width: 900px) {
   .alarm-summary {
     grid-template-columns: repeat(2, 1fr);
@@ -2694,6 +2732,44 @@ button:disabled {
 
 .patrol-info-row span {
   white-space: nowrap;
+}
+
+.patrol-source-alarm-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+  border: 1px solid #fcd34d;
+  border-radius: 6px;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+
+.patrol-source-alarm-info.patrol-source-alarm-missing {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #991b1b;
+}
+
+.patrol-source-alarm-label {
+  font-weight: 600;
+  color: #92400e;
+}
+
+.patrol-source-alarm-missing .patrol-source-alarm-label {
+  color: #991b1b;
+}
+
+.patrol-source-alarm-desc {
+  color: #554a42;
+}
+
+.patrol-source-alarm-view-btn {
+  margin-left: auto;
+  padding: 4px 10px;
+  font-size: 12px;
 }
 
 .patrol-task-notes {

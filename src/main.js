@@ -1709,7 +1709,8 @@ function recalculateAlarms() {
       ...alarm,
       status: existing.status,
       createdAt: existing.createdAt,
-      updatedAt: existing.updatedAt
+      updatedAt: existing.updatedAt,
+      patrolTaskId: existing.patrolTaskId || null
     };
   });
 
@@ -1722,6 +1723,45 @@ function updateAlarmStatus(alarmId, status) {
   );
   saveAlarms();
   renderAlarmCenter();
+}
+
+function setAlarmPatrolTaskId(alarmId, taskId) {
+  alarms = alarms.map(a =>
+    a.id === alarmId ? { ...a, patrolTaskId: taskId || null, updatedAt: new Date().toISOString() } : a
+  );
+  saveAlarms();
+}
+
+function clearAlarmPatrolTaskId(taskId) {
+  let updated = false;
+  alarms = alarms.map(a => {
+    if (a.patrolTaskId === taskId) {
+      updated = true;
+      return { ...a, patrolTaskId: null, updatedAt: new Date().toISOString() };
+    }
+    return a;
+  });
+  if (updated) saveAlarms();
+  return updated;
+}
+
+function getAlarmRelatedRecordsInfo(alarm) {
+  if (alarm.type === 'multiple') {
+    const relatedRecords = records.filter(r => alarm.recordIds?.includes(r.id));
+    if (relatedRecords.length) {
+      const parts = relatedRecords.slice(0, 3).map(r => {
+        return `${r.at.slice(5, 16).replace('T', ' ')} ${r.db}dB ${r.source}`;
+      });
+      if (relatedRecords.length > 3) parts.push(`...共${relatedRecords.length}条`);
+      return parts.join('；');
+    }
+  } else if (alarm.recordId) {
+    const record = records.find(r => r.id === alarm.recordId);
+    if (record) {
+      return `${record.at.slice(5, 16).replace('T', ' ')} ${record.db}dB ${record.source} ${record.feeling}`;
+    }
+  }
+  return '无关联记录';
 }
 
 function getMonitoringPointById(id) {
@@ -2327,6 +2367,32 @@ function renderAlarmCenter() {
         </div>
       `;
     }
+
+    let patrolTaskInfo = '';
+    let patrolTaskBtn = '';
+    if (alarm.patrolTaskId) {
+      const task = patrolTasks.find(t => t.id === alarm.patrolTaskId);
+      if (task) {
+        const taskStatusLabel = patrolStatusLabels[task.status] || '未知';
+        const taskStatusClass = `patrol-status-${task.status}`;
+        patrolTaskInfo = `
+          <div class="alarm-patrol-info">
+            <span class="alarm-patrol-label">🔗 关联巡查任务：</span>
+            <span class="patrol-status-badge ${taskStatusClass}">${taskStatusLabel}</span>
+            <span class="alarm-patrol-task">${task.location} · ${task.assignee}</span>
+            <button class="secondary alarm-patrol-view-btn" data-view-patrol="${task.id}">查看任务</button>
+          </div>
+        `;
+      } else {
+        patrolTaskInfo = `
+          <div class="alarm-patrol-info alarm-patrol-missing">
+            <span class="alarm-patrol-label">⚠️ 关联的巡查任务已不存在</span>
+          </div>
+        `;
+      }
+    } else {
+      patrolTaskBtn = `<button class="primary" data-create-patrol="${alarm.id}">转巡查任务</button>`;
+    }
     
     return `
       <div class="alarm-item ${statusClass} ${typeClass}">
@@ -2339,10 +2405,12 @@ function renderAlarmCenter() {
         </div>
         <div class="alarm-message">${alarm.message}</div>
         ${detailInfo}
+        ${patrolTaskInfo}
         <div class="alarm-footer">
           <span class="alarm-status-badge ${statusClass}">${statusLabel}</span>
           <span class="alarm-time">生成于 ${new Date(alarm.createdAt).toLocaleString('zh-CN')}</span>
           <div class="alarm-actions">
+            ${patrolTaskBtn}
             ${alarm.status === 'pending' ? `
               <button class="secondary" data-confirm="${alarm.id}">确认</button>
               <button class="secondary" data-ignore="${alarm.id}">忽略</button>
@@ -2365,6 +2433,19 @@ function renderAlarmCenter() {
   });
   alarmListEl.querySelectorAll('[data-reopen]').forEach(btn => {
     btn.addEventListener('click', () => updateAlarmStatus(btn.dataset.reopen, 'pending'));
+  });
+  alarmListEl.querySelectorAll('[data-create-patrol]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const alarmId = btn.dataset.createPatrol;
+      const alarm = alarms.find(a => a.id === alarmId);
+      if (alarm) createPatrolFromAlarm(alarm);
+    });
+  });
+  alarmListEl.querySelectorAll('[data-view-patrol]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      closeAlarmCenter();
+      openPatrolTasks();
+    });
   });
 }
 
@@ -3085,6 +3166,53 @@ function createPatrolFromRecord(record) {
   document.querySelector('#patrolFormSection').scrollIntoView({ behavior: 'smooth' });
 }
 
+let _pendingAlarmToPatrol = null;
+
+function createPatrolFromAlarm(alarm) {
+  if (alarm.patrolTaskId) {
+    const existingTask = patrolTasks.find(t => t.id === alarm.patrolTaskId);
+    if (existingTask) {
+      openConfirmDialog('提示', `该告警已关联巡查任务，是否前往查看？`, () => {
+        closeAlarmCenter();
+        openPatrolTasks();
+      });
+      return;
+    }
+  }
+
+  _pendingAlarmToPatrol = alarm.id;
+  closeAlarmCenter();
+  openPatrolTasks();
+  editingPatrolTaskId = null;
+  showPatrolForm(null);
+
+  document.querySelector('#patrolLocation').value = alarm.location;
+
+  const matchedPoint = monitoringPoints.find(p => p.name === alarm.location);
+  if (matchedPoint) {
+    document.querySelector('#patrolMonitoringPoint').value = matchedPoint.id;
+  }
+
+  const now = new Date();
+  now.setHours(now.getHours() + 2);
+  const defaultTime = toLocalDateTimeInputValue(now);
+  document.querySelector('#patrolScheduledAt').value = defaultTime;
+
+  const thresholdDesc = alarm.type === 'multiple'
+    ? `超标次数阈值：${alarm.threshold}次，噪声阈值：${alarm.noiseThreshold}dB`
+    : `阈值：${alarm.threshold}dB${alarm.type === 'nighttime' ? `（夜间时段${alarm.nightHours}）` : ''}`;
+
+  const notesLines = [];
+  notesLines.push(`【告警类型】${alarm.typeLabel}`);
+  notesLines.push(`【阈值配置】${thresholdDesc}`);
+  notesLines.push(`【噪声记录】${getAlarmRelatedRecordsInfo(alarm)}`);
+  notesLines.push(`【触发原因】${alarm.message}`);
+
+  document.querySelector('#patrolNotes').value = notesLines.join('\n');
+
+  document.querySelector('#patrolFormSection').scrollIntoView({ behavior: 'smooth' });
+}
+
 function handlePatrolFormSubmit(event) {
   event.preventDefault();
   const data = Object.fromEntries(new FormData(patrolTaskForm).entries());
@@ -3108,6 +3236,9 @@ function handlePatrolFormSubmit(event) {
     ? toLocalDateTimeInputValue(now)
     : (data.completedAt || null);
 
+  const existingTask = editingPatrolTaskId ? patrolTasks.find(t => t.id === editingPatrolTaskId) : null;
+  const sourceAlarmId = existingTask?.sourceAlarmId || _pendingAlarmToPatrol;
+
   const task = {
     id: editingPatrolTaskId || crypto.randomUUID(),
     location,
@@ -3117,7 +3248,8 @@ function handlePatrolFormSubmit(event) {
     status: data.status || 'pending',
     completedAt,
     notes: data.notes || '',
-    createdAt: editingPatrolTaskId ? (patrolTasks.find(t => t.id === editingPatrolTaskId)?.createdAt || nowIso) : nowIso,
+    sourceAlarmId: sourceAlarmId || null,
+    createdAt: editingPatrolTaskId ? (existingTask?.createdAt || nowIso) : nowIso,
     updatedAt: nowIso
   };
 
@@ -3128,6 +3260,13 @@ function handlePatrolFormSubmit(event) {
   }
 
   savePatrolTasks();
+
+  if (_pendingAlarmToPatrol) {
+    setAlarmPatrolTaskId(_pendingAlarmToPatrol, task.id);
+    updateAlarmStatus(_pendingAlarmToPatrol, 'confirmed');
+    _pendingAlarmToPatrol = null;
+  }
+
   editingPatrolTaskId = null;
   hidePatrolForm();
   renderPatrolTasks();
@@ -3136,6 +3275,9 @@ function handlePatrolFormSubmit(event) {
 function updatePatrolTaskStatus(taskId, newStatus) {
   const now = new Date();
   const nowIso = now.toISOString();
+  const task = patrolTasks.find(t => t.id === taskId);
+  const oldStatus = task?.status;
+
   patrolTasks = patrolTasks.map(t => {
     if (t.id === taskId) {
       const completedAt = newStatus === 'completed' && !t.completedAt
@@ -3146,6 +3288,19 @@ function updatePatrolTaskStatus(taskId, newStatus) {
     return t;
   });
   savePatrolTasks();
+
+  if (task?.sourceAlarmId) {
+    if (newStatus === 'cancelled') {
+      setAlarmPatrolTaskId(task.sourceAlarmId, null);
+      updateAlarmStatus(task.sourceAlarmId, 'pending');
+    } else if (oldStatus === 'cancelled' && newStatus !== 'cancelled') {
+      setAlarmPatrolTaskId(task.sourceAlarmId, taskId);
+    }
+    if (!document.querySelector('#alarmCenterOverlay').classList.contains('hidden')) {
+      renderAlarmCenter();
+    }
+  }
+
   renderPatrolTasks();
 }
 
@@ -3153,9 +3308,18 @@ function deletePatrolTask(taskId) {
   const task = patrolTasks.find(t => t.id === taskId);
   if (!task) return;
 
-  openConfirmDialog('删除任务', `确定要删除地点"${task.location}"的巡查任务吗？`, () => {
+  openConfirmDialog('删除任务', `确定要删除地点"${task.location}"的巡查任务吗？${task.sourceAlarmId ? '\n\n该任务关联的告警将被重置为待处理状态。' : ''}`, () => {
     patrolTasks = patrolTasks.filter(t => t.id !== taskId);
     savePatrolTasks();
+
+    if (task.sourceAlarmId) {
+      clearAlarmPatrolTaskId(taskId);
+      updateAlarmStatus(task.sourceAlarmId, 'pending');
+      if (!document.querySelector('#alarmCenterOverlay').classList.contains('hidden')) {
+        renderAlarmCenter();
+      }
+    }
+
     renderPatrolTasks();
   });
 }
@@ -3206,6 +3370,28 @@ function renderPatrolTasks() {
     const isOverdue = task.status !== 'completed' && task.status !== 'cancelled'
       && new Date(task.scheduledAt) < new Date();
 
+    let sourceAlarmInfo = '';
+    if (task.sourceAlarmId) {
+      const alarm = alarms.find(a => a.id === task.sourceAlarmId);
+      if (alarm) {
+        const alarmStatusLabel = { pending: '待处理', confirmed: '已确认', ignored: '已忽略' }[alarm.status] || '未知';
+        sourceAlarmInfo = `
+          <div class="patrol-source-alarm-info">
+            <span class="patrol-source-alarm-label">🔗 来源告警：</span>
+            <span class="alarm-type-badge">${alarm.typeLabel}</span>
+            <span class="patrol-source-alarm-desc">${alarm.location} · ${alarm.db || alarm.maxDb}dB · ${alarmStatusLabel}</span>
+            <button class="secondary patrol-source-alarm-view-btn" data-view-alarm="${task.sourceAlarmId}">查看告警</button>
+          </div>
+        `;
+      } else {
+        sourceAlarmInfo = `
+          <div class="patrol-source-alarm-info patrol-source-alarm-missing">
+            <span class="patrol-source-alarm-label">⚠️ 来源告警已不存在</span>
+          </div>
+        `;
+      }
+    }
+
     return `
       <div class="patrol-task-item patrol-status-${task.status} ${isOverdue ? 'patrol-overdue' : ''}">
         <div class="patrol-task-head">
@@ -3226,6 +3412,7 @@ function renderPatrolTasks() {
             ${point ? `<span>📍 ${point.district}</span>` : ''}
           </div>
         </div>
+        ${sourceAlarmInfo}
         ${task.notes ? `<div class="patrol-task-notes">📝 ${escapeHtml(task.notes)}</div>` : ''}
         <div class="patrol-task-footer">
           <span class="patrol-task-time">创建于 ${new Date(task.createdAt).toLocaleString('zh-CN')}</span>
@@ -3270,6 +3457,12 @@ function renderPatrolTasks() {
   });
   listEl.querySelectorAll('[data-patrol-del]').forEach(btn => {
     btn.addEventListener('click', () => deletePatrolTask(btn.dataset.patrolDel));
+  });
+  listEl.querySelectorAll('[data-view-alarm]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      closePatrolTasks();
+      openAlarmCenter();
+    });
   });
 }
 
